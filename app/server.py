@@ -405,11 +405,12 @@ def serve(host: str, port: int) -> None:
     httpd, port = _bind(host, port)
     SERVER_PORT = port
     httpd.daemon_threads = True
-    try:
-        with open(os.path.join(store.DATA_DIR, "port"), "w", encoding="utf-8") as f:
-            f.write(str(port))
-    except Exception:
-        pass
+    if not os.environ.get("XIAOAI_NO_PORT_FILE"):
+        try:
+            with open(os.path.join(store.DATA_DIR, "port"), "w", encoding="utf-8") as f:
+                f.write(str(port))
+        except Exception:
+            pass
     safe_print("工作台已启动: http://%s:%d" % (host, port), flush=True)
     try:
         httpd.serve_forever()

@@ -43,9 +43,11 @@ class ServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.logfile = open(os.path.join(ROOT, "data", "test-server.out"), "w+")
+        # 关键：不让测试实例覆盖真实的 data/port，否则 start.sh / stop.sh 会认错端口
+        env = dict(os.environ, XIAOAI_NO_PORT_FILE="1")
         cls.proc = subprocess.Popen(
             [sys.executable, "-m", "app.server", "--port", str(PORT)],
-            cwd=ROOT, stdout=cls.logfile, stderr=subprocess.STDOUT)
+            cwd=ROOT, stdout=cls.logfile, stderr=subprocess.STDOUT, env=env)
         for _ in range(80):
             if cls.proc.poll() is not None:
                 break
