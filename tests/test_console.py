@@ -29,6 +29,7 @@ class ConsoleTest(unittest.TestCase):
         with mock.patch.object(sys, "stdout", stream):
             console.setup()
             console.safe_print("工作台")
+            stream.flush()
         self.assertIn("工作台", raw.getvalue().decode("utf-8", "replace"))
 
 
