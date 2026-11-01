@@ -19,7 +19,8 @@ class PortableTest(unittest.TestCase):
         self.assertEqual(store.portable_path(os.path.join(store.ROOT, "data", "x")), "data/x")
 
     def test_portable_keeps_outside_paths_absolute(self):
-        outside = "/tmp/other-project"
+        # 用真正位于项目之外、且在本平台算绝对路径的位置（Windows 上 /tmp 不算绝对路径）
+        outside = os.path.abspath(os.path.join(store.ROOT, os.pardir, "another-project"))
         self.assertEqual(store.portable_path(outside), outside)
 
     def test_deep_merge_keeps_defaults(self):

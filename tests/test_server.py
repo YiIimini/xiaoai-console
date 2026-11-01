@@ -14,13 +14,20 @@ sys.path.insert(0, ROOT)
 PORT = 8971
 BASE = "http://127.0.0.1:%d" % PORT
 
+# Windows runner 可能带系统代理，会把 127.0.0.1 也代理走，必须显式禁用
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _open(req, timeout=8):
+    return _OPENER.open(req, timeout=timeout)
+
 
 def _req(path, method="GET", body=None, headers=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(BASE + path, data=data, method=method,
                                  headers={"Content-Type": "application/json", **(headers or {})})
     try:
-        with urllib.request.urlopen(req, timeout=8) as r:
+        with _open(req) as r:
             return r.status, json.loads(r.read().decode() or "{}")
     except urllib.error.HTTPError as e:
         payload = e.read().decode()
@@ -35,22 +42,37 @@ class ServerTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        cls.logfile = open(os.path.join(ROOT, "data", "test-server.out"), "w+")
         cls.proc = subprocess.Popen(
             [sys.executable, "-m", "app.server", "--port", str(PORT)],
-            cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(60):
+            cwd=ROOT, stdout=cls.logfile, stderr=subprocess.STDOUT)
+        for _ in range(80):
+            if cls.proc.poll() is not None:
+                break
             try:
-                urllib.request.urlopen(BASE + "/api/ping", timeout=1)
+                _open(urllib.request.Request(BASE + "/api/ping"), timeout=1)
                 return
             except Exception:
-                time.sleep(0.2)
-        raise RuntimeError("测试服务器没起来")
+                time.sleep(0.25)
+        cls.logfile.seek(0)
+        output = cls.logfile.read()[-2000:]
+        cls.tearDownClass()
+        raise RuntimeError("测试服务器没起来，输出：\n" + output)
 
     @classmethod
     def tearDownClass(cls):
-        if cls.proc:
+        if cls.proc and cls.proc.poll() is None:
             cls.proc.terminate()
-            cls.proc.wait(timeout=10)
+            try:
+                cls.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                cls.proc.kill()
+                cls.proc.wait(timeout=5)
+        if getattr(cls, "logfile", None):
+            try:
+                cls.logfile.close()
+            except Exception:
+                pass
 
     def test_ping(self):
         code, data = _req("/api/ping")
@@ -68,7 +90,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(code, 404)
 
     def test_static_index(self):
-        with urllib.request.urlopen(BASE + "/", timeout=5) as r:
+        with _open(urllib.request.Request(BASE + "/"), timeout=5) as r:
             self.assertEqual(r.status, 200)
             self.assertIn(b"<title>", r.read())
 
