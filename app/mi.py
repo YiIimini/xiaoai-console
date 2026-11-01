@@ -146,6 +146,12 @@ class RealSpeaker:
             await self.connect()
         return await self.mina.text_to_speech(self.resolve_did(), text)
 
+    async def stop(self) -> bool:
+        """打断当前播报。"""
+        if self.mina is None:
+            await self.connect()
+        return await self.mina.player_stop(self.resolve_did())
+
 
 # ---------------------------------------------------------------- 演示模式
 class MockSpeaker:
@@ -188,6 +194,11 @@ class MockSpeaker:
         self.spoken.append({"ts": time.time(), "text": text})
         self.spoken = self.spoken[-50:]
         self.log.info("🔊 播报: %s" % text)
+        return True
+
+    async def stop(self) -> bool:
+        self.spoken.append({"ts": time.time(), "text": "（打断）"})
+        self.log.info("🔇 截断当前播报")
         return True
 
 

@@ -75,6 +75,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "voice": {
         "stream_speech": True,
+        "barge_in": True,
         "wake_words": "小助手,跑一下,调试,报错,改一下,看看代码,构建,测试",
         "speak": True,
         "tts_max_chars": 160,

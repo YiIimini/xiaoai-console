@@ -335,6 +335,12 @@
               <span class="chk-t">逐句流式播报</span>
               <span class="note">回答够一句就先念一句，不必等整段生成完。<b class="warn">代码块会整体跳过</b>，不会被念出来；关掉则等全部说完再按摘要播报。</span>
             </label>
+
+            <label class="chk">
+              <input type="checkbox" name="barge_in">
+              <span class="chk-t">允许语音打断</span>
+              <span class="note">它还在说的时候你再开口，会立刻停掉当前播报并接住新问题。关掉则上一轮结束前的输入被直接忽略（<b class="warn">不会排队重放</b>，避免答非所问）。</span>
+            </label>
           </div>
 
           <div class="row">
@@ -391,6 +397,7 @@
           <div class="row between">
             <h2>会话记录</h2>
             <div class="row">
+              <input id="hist-search" type="text" placeholder="搜索提问或回答…" style="width:190px">
               <button class="btn" id="btn-hist-refresh">刷新</button>
               <button class="btn danger" id="btn-hist-clear" title="清空本机记录文件，不影响音箱和模型配置">清空</button>
             </div>
@@ -406,6 +413,13 @@
           <div class="row between">
             <h2>运行日志</h2>
             <div class="row">
+              <select id="log-level" style="width:120px">
+                <option value="all">全部级别</option>
+                <option value="ok">仅成功</option>
+                <option value="warn">仅注意</option>
+                <option value="error">仅错误</option>
+                <option value="info">仅信息</option>
+              </select>
               <label class="chk-inline"><input type="checkbox" id="log-autoscroll" checked> 自动滚到底</label>
             </div>
           </div>

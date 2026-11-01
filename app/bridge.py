@@ -113,6 +113,8 @@ class Bridge:
         self._stop_evt = threading.Event()
         self.state = "stopped"          # stopped | starting | running | error
         self.speaker = None
+        self._busy = False
+        self._gen = 0
         self.stats: Dict[str, Any] = {
             "turns": 0,
             "polls": 0,
@@ -133,6 +135,7 @@ class Bridge:
         return {
             "state": self.state,
             "running": self.running,
+            "busy": self._busy,
             "uptime": int(time.time() - self.stats["started_at"]) if self.stats["started_at"] else 0,
             "stats": {k: v for k, v in self.stats.items() if k != "spoken"},
             "spoken": self.stats["spoken"][-10:],
@@ -274,38 +277,18 @@ class Bridge:
                         continue
                     last_hit = time.time()
                     query = self._strip_wake(cfg, q)
-                    LOG.info("🎤 收到: %s" % query)
-                    vcfg = cfg["voice"]
-                    if vcfg.get("ack_enabled") and (vcfg.get("ack") or "").strip():
-                        await self._say(vcfg, vcfg["ack"])
-                    spoken_stream = False
-                    on_delta = None
-                    drain_task = None
-                    sent_q: "queue.Queue[Optional[str]]" = queue.Queue()
-                    if cfg["voice"].get("speak", True) and cfg["voice"].get("stream_speech", True):
-                        splitter = SentenceStream()
 
-                        def on_delta(text: str, _sp=splitter, _q=sent_q) -> None:
-                            for sent in _sp.feed(text):
-                                _q.put(sent)
+                    # 上一轮还没结束时：能打断就打断，否则明确忽略，绝不排队重放
+                    if self._busy:
+                        if cfg["voice"].get("barge_in", True):
+                            await self._barge_in()
+                        else:
+                            LOG.info("上一轮仍在处理，忽略: %s" % query[:30])
+                            continue
 
-                        drain_task = asyncio.ensure_future(self._drain_sentences(sent_q, cfg["voice"]))
-                    turn = await loop.run_in_executor(None, self.run_agent, query, "voice", False, on_delta)
-                    if drain_task is not None:
-                        for sent in splitter.flush():      # 收尾未成句的残句
-                            sent_q.put(sent)
-                        sent_q.put(None)
-                        spoken_stream = await drain_task
-                    self.stats["turns"] += 1
-                    self.stats["last_query"] = query
-                    self.stats["last_answer"] = turn.get("answer", "")
-                    if spoken_stream:
-                        turn["spoken"] = True
-                        HIST.flush()
-                    elif cfg["voice"].get("speak", True):
-                        if await self._say(cfg["voice"], turn.get("answer", "")):
-                            turn["spoken"] = True
-                            HIST.flush()
+                    self._gen += 1
+                    self._busy = True
+                    asyncio.ensure_future(self._handle_turn(cfg, query, self._gen))
             except Exception as e:  # noqa: BLE001
                 self.stats["errors"] += 1
                 self.stats["last_error"] = "%s: %s" % (type(e).__name__, e)
@@ -314,23 +297,100 @@ class Bridge:
                 continue
             await asyncio.sleep(interval)
 
-    async def _drain_sentences(self, q: "queue.Queue[Optional[str]]", voice_cfg: Dict[str, Any]) -> bool:
-        """边生成边播报：队列里有句子就送音箱，收到 None 结束。"""
+    async def _barge_in(self) -> None:
+        """新的一句话来了：停掉正在播报的内容，并作废当前这轮。"""
+        self._gen += 1
+        LOG.warn("检测到新的语音输入，打断当前回复")
+        try:
+            stop = getattr(self.speaker, "stop", None)
+            if stop:
+                await stop()
+        except Exception as e:  # noqa: BLE001
+            LOG.warn("停止播报失败: %s" % e)
+
+    async def _handle_turn(self, cfg: Dict[str, Any], query: str, gen: int) -> None:
+        """一轮完整处理。用 generation 作废旧轮，避免打断后旧结果又播出来。"""
+        loop = asyncio.get_running_loop()
+        vcfg = cfg["voice"]
+        try:
+            LOG.info("🎤 收到: %s" % query)
+            if vcfg.get("ack_enabled") and (vcfg.get("ack") or "").strip():
+                await self._say(vcfg, vcfg["ack"], gen)
+
+            spoken_stream = False
+            on_delta = None
+            drain_task = None
+            splitter = None
+            sent_q: "queue.Queue[Optional[str]]" = queue.Queue()
+
+            if vcfg.get("speak", True) and vcfg.get("stream_speech", True):
+                splitter = SentenceStream()
+
+                def on_delta(text: str, _sp=splitter, _q=sent_q, _g=gen) -> None:
+                    if _g != self._gen:
+                        return                      # 已被打断，丢弃旧轮的增量
+                    for sent in _sp.feed(text):
+                        _q.put(sent)
+
+                drain_task = asyncio.ensure_future(self._drain_sentences(sent_q, vcfg, gen))
+
+            turn = await loop.run_in_executor(None, self.run_agent, query, "voice", False, on_delta)
+
+            if gen != self._gen:                    # 期间被新语音打断
+                if drain_task is not None:
+                    sent_q.put(None)
+                    await drain_task
+                LOG.info("该轮已被打断，结果不播报")
+                return
+
+            if drain_task is not None:
+                for sent in splitter.flush():
+                    sent_q.put(sent)
+                sent_q.put(None)
+                spoken_stream = await drain_task
+
+            self.stats["turns"] += 1
+            self.stats["last_query"] = query
+            self.stats["last_answer"] = turn.get("answer", "")
+            if spoken_stream:
+                turn["spoken"] = True
+                HIST.flush()
+            elif vcfg.get("speak", True):
+                if await self._say(vcfg, turn.get("answer", ""), gen):
+                    turn["spoken"] = True
+                    HIST.flush()
+        except Exception as e:  # noqa: BLE001
+            self.stats["errors"] += 1
+            self.stats["last_error"] = "%s: %s" % (type(e).__name__, e)
+            LOG.error("处理失败: %s" % self.stats["last_error"])
+        finally:
+            if gen == self._gen:
+                self._busy = False
+
+    async def _drain_sentences(self, q: "queue.Queue[Optional[str]]", voice_cfg: Dict[str, Any],
+                               gen: int = 0) -> bool:
+        """边生成边播报：队列里有句子就送音箱，收到 None 结束。被打断即停。"""
         spoke = False
         while True:
             try:
                 sent = q.get_nowait()
             except queue.Empty:
+                if gen and gen != self._gen:
+                    return spoke
                 await asyncio.sleep(0.05)
                 continue
             if sent is None:
                 break
+            if gen and gen != self._gen:
+                return spoke
             if await self._say(voice_cfg, sent):
                 spoke = True
         return spoke
 
-    async def _say(self, voice_cfg: Dict[str, Any], text: str) -> bool:
+    async def _say(self, voice_cfg: Dict[str, Any], text: str, gen: int = 0) -> bool:
         if not (text or "").strip():
+            return False
+        if gen and gen != self._gen:
             return False
         speech = to_speech(text, int(voice_cfg.get("tts_max_chars", 160)))
         if not speech.strip():

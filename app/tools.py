@@ -145,6 +145,26 @@ MIOT_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "memory_remember",
+            "description": "把一条值得长期记住的事实写进记忆（项目名、端口、偏好、约定）。只记稳定的信息，不要记临时对话。",
+            "parameters": {
+                "type": "object",
+                "properties": {"text": {"type": "string", "description": "要记住的一句话"}},
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_stats",
+            "description": "查看记忆里存了多少条、上下文里带了几轮、最近都记了什么。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "mi_home_devices",
             "description": "列出这个小米账号下的所有米家设备（名称、型号）。不知道有什么设备时先调它。",
             "parameters": {"type": "object", "properties": {}},
@@ -319,6 +339,28 @@ def _dispatch_miot(name: str, args: Dict[str, Any]) -> str:
         return "米家操作失败: %s" % e
 
 
+def _dispatch_memory(name: str, args: Dict[str, Any]) -> str:
+    from . import memory
+
+    try:
+        if name == "memory_remember":
+            return memory.MEM.remember(args.get("text", ""))
+        if name == "memory_stats":
+            st = memory.MEM.stats()
+            recent = st.get("recent") or []
+            lines = ["已存 %d 条，本轮上下文 %d 轮，过期时间 %s 分钟" % (
+                st["stored"], st["in_context"], st["ttl_minutes"])]
+            if recent:
+                lines.append("最近：")
+                lines += ["  - " + t.get("q", "")[:60] for t in recent[-5:]]
+            return "\n".join(lines)
+        if name == "memory_forget":
+            return memory.MEM.forget(args.get("keyword", ""))
+        return "未知记忆工具: %s" % name
+    except Exception as e:  # noqa: BLE001
+        return "记忆操作失败: %s" % e
+
+
 def _miot_enabled() -> bool:
     from .store import load_config
 
@@ -327,6 +369,8 @@ def _miot_enabled() -> bool:
 
 def dispatch(cfg: Dict[str, Any], name: str, args: Dict[str, Any]) -> str:
     try:
+        if name.startswith("memory_"):
+            return _dispatch_memory(name, args)
         if name.startswith("mi_home_"):
             if not _miot_enabled():
                 return "米家接入当前已关闭（到「米家设备」面板开启）"

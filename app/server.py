@@ -528,6 +528,9 @@ def _bind(host: str, want: int, span: int = 20):
 SERVER_PORT = 0
 
 
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
 def serve(host: str, port: int) -> None:
     global SERVER_PORT
     httpd, port = _bind(host, port)
@@ -539,6 +542,9 @@ def serve(host: str, port: int) -> None:
                 f.write(str(port))
         except Exception:
             pass
+    if host not in LOOPBACK:
+        safe_print("⚠  服务绑定在 %s：局域网内任何人都能访问、控制你的设备并执行命令。" % host)
+        safe_print("   默认应为 127.0.0.1，仅在你清楚后果时才改。")
     safe_print("工作台已启动: http://%s:%d" % (host, port), flush=True)
     try:
         httpd.serve_forever()
@@ -551,10 +557,12 @@ def serve(host: str, port: int) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default=None, help="默认取配置 server.host，否则 127.0.0.1")
     ap.add_argument("--port", type=int, default=8799)
     ap.add_argument("--autostart", action="store_true", help="启动服务后自动拉起桥接")
     args = ap.parse_args()
+    if not args.host:
+        args.host = (store.load_config().get("server") or {}).get("host") or "127.0.0.1"
     if args.autostart:
         threading.Timer(1.5, BR.start).start()
     serve(args.host, args.port)

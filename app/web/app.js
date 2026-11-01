@@ -200,6 +200,18 @@
   $("#btn-restart").addEventListener("click", () => bridgeCmd("restart"));
 
   /* ------------------------------------------------ 手动对话 */
+  ["#chat-input", "#mock-input", "#tts-input"].forEach(sel => {
+    const el = $(sel);
+    if (!el) return;
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        const target = sel === "#chat-input" ? "#btn-chat" : sel === "#mock-input" ? "#btn-mock" : "#btn-tts";
+        $(target).click();
+      }
+    });
+  });
+
   $("#btn-chat").addEventListener("click", async () => {
     const text = $("#chat-input").value.trim();
     if (!text) return toast("先说点什么", true);
@@ -389,15 +401,27 @@
     </div>`;
   }
 
-  async function loadHistory() {
-    const r = await api("/api/history?limit=100");
+  let HIST_ITEMS = [];
+
+  function renderHistory() {
+    const kw = ($("#hist-search")?.value || "").trim().toLowerCase();
+    const rows = HIST_ITEMS.filter(t =>
+      !kw || (t.query || "").toLowerCase().includes(kw) || (t.answer || "").toLowerCase().includes(kw));
     const box = $("#turns");
-    if (!r.ok) { box.innerHTML = '<p class="muted">读取失败</p>'; return; }
-    const items = r.items || [];
-    box.innerHTML = items.length
-      ? items.slice().reverse().map(turnHtml).join("")
-      : '<p class="muted">暂无记录。</p>';
+    box.innerHTML = rows.length
+      ? rows.slice().reverse().map(turnHtml).join("")
+      : `<p class="muted">${HIST_ITEMS.length ? "没有匹配「" + esc(kw) + "」的记录。" : "暂无记录。"}</p>`;
   }
+
+  async function loadHistory() {
+    const r = await api("/api/history?limit=200");
+    if (!r.ok) { $("#turns").innerHTML = '<p class="muted">读取失败</p>'; return; }
+    HIST_ITEMS = r.items || [];
+    renderHistory();
+  }
+
+  const histSearch = $("#hist-search");
+  if (histSearch) histSearch.addEventListener("input", renderHistory);
   $("#btn-hist-refresh").addEventListener("click", loadHistory);
   $("#btn-hist-clear").addEventListener("click", async () => {
     const r = await api("/api/history/clear", {});
@@ -613,6 +637,23 @@
   });
 
   /* ------------------------------------------------ 日志 */
+  let LOG_FILTER = "all";
+
+  function logLine(rec) {
+    return `<span class="l-time">${tstr(rec.ts)}</span> <span class="l-${rec.level}">${esc(rec.msg)}</span>`;
+  }
+
+  function redrawLogs() {
+    const rows = LOGS.filter(r => LOG_FILTER === "all" || r.level === LOG_FILTER);
+    const text = rows.map(logLine).join("\n");
+    $("#log-mini").innerHTML = text;
+    $("#log-full").innerHTML = text;
+    const mini = $("#log-mini");
+    mini.scrollTop = mini.scrollHeight;
+    const full = $("#log-full");
+    full.scrollTop = full.scrollHeight;
+  }
+
   function appendLog(rec) {
     if (SEEN.has(rec.seq)) return;
     if (SEEN.size > 6000) SEEN.clear();
@@ -620,7 +661,8 @@
     if (rec.seq > LAST_SEQ) LAST_SEQ = rec.seq;
     LOGS.push(rec);
     if (LOGS.length > 3000) LOGS.splice(0, LOGS.length - 3000);
-    const line = `<span class="l-time">${tstr(rec.ts)}</span> <span class="l-${rec.level}">${esc(rec.msg)}</span>`;
+    if (LOG_FILTER !== "all" && rec.level !== LOG_FILTER) return;
+    const line = logLine(rec);
     const mini = $("#log-mini");
     mini.insertAdjacentHTML("beforeend", line + "\n");
     const full = $("#log-full");
@@ -629,6 +671,14 @@
     if ($("#log-autoscroll").checked && $('[data-panel="logs"]').classList.contains("active")) {
       full.scrollTop = full.scrollHeight;
     }
+  }
+
+  const logLevelSel = $("#log-level");
+  if (logLevelSel) {
+    logLevelSel.addEventListener("change", () => {
+      LOG_FILTER = logLevelSel.value;
+      redrawLogs();
+    });
   }
 
   function connectSSE() {
