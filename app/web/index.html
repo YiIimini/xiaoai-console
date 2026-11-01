@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小爱同学 · 大模型工作台</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot-logo"></span>
+      <div>
+        <h1>小爱同学 · 大模型工作台</h1>
+        <p class="sub">路线 B · 协议接管 · 本地运行</p>
+      </div>
+    </div>
+
+    <div class="pills">
+      <span class="pill" id="pill-mode">模式检测中</span>
+      <span class="pill" id="pill-bridge">桥接 未启动</span>
+      <span class="pill" id="pill-miservice">依赖 检测中</span>
+      <span class="pill" id="pill-turns">语音回合 0</span>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary" id="btn-start" title="开始轮询小爱对话记录并接管回答。改动配置后需要重启才生效">启动桥接</button>
+      <button class="btn" id="btn-restart" title="停止后重新读取配置再启动，改完配置用它">重启</button>
+      <button class="btn danger" id="btn-stop" title="停止轮询，音箱恢复成普通小爱">停止</button>
+    </div>
+  </header>
+
+  <div class="body">
+    <nav class="nav">
+      <button class="nav-item active" data-tab="overview">总览</button>
+      <button class="nav-item" data-tab="mi">音箱接入</button>
+      <button class="nav-item" data-tab="llm">大模型</button>
+      <button class="nav-item" data-tab="agent">Agent 与沙箱</button>
+      <button class="nav-item" data-tab="voice">语音播报</button>
+      <button class="nav-item" data-tab="history">会话记录</button>
+      <button class="nav-item" data-tab="logs">运行日志</button>
+      <button class="nav-item" data-tab="portable">迁移与环境</button>
+      <div class="nav-foot">
+        <a href="/api/state" target="_blank">接口状态</a>
+      </div>
+    </nav>
+
+    <main class="main">
+
+      <!-- ================= 总览 ================= -->
+      <section class="panel active" data-panel="overview">
+        <div class="cards">
+          <div class="card">
+            <div class="card-k">桥接状态</div>
+            <div class="card-v" id="ov-state">—</div>
+            <div class="card-d" id="ov-uptime">未运行</div>
+          </div>
+          <div class="card">
+            <div class="card-k">语音回合</div>
+            <div class="card-v" id="ov-turns">0</div>
+            <div class="card-d" id="ov-polls">轮询 0 次</div>
+          </div>
+          <div class="card">
+            <div class="card-k">错误计数</div>
+            <div class="card-v" id="ov-errors">0</div>
+            <div class="card-d" id="ov-lasterr">—</div>
+          </div>
+          <div class="card">
+            <div class="card-k">最近一句</div>
+            <div class="card-v sm" id="ov-query">—</div>
+            <div class="card-d sm" id="ov-answer">—</div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="box">
+            <h2>手动对话（走同一条 Agent 通道）</h2>
+            <div class="row">
+              <input id="chat-input" type="text" placeholder="例如：跑一下测试，挂了几个？">
+              <label class="chk-inline" title="勾选后会把这句回答也念出来，用来验证音箱连通"><input type="checkbox" id="chat-speak"> 播报</label>
+              <button class="btn primary" id="btn-chat">发送</button>
+            </div>
+            <p class="note">不经过音箱，直接在网页里测大模型和工具，排查问题时先看这里。勾「播报」需要桥接已在运行。</p>
+            <div class="result" id="chat-result">还没有测试消息。</div>
+          </div>
+
+          <div class="box">
+            <h2>模拟发问（不接真机也能验证链路）</h2>
+            <div class="row">
+              <input id="mock-input" type="text" placeholder="模拟小爱收到的语音文本">
+              <button class="btn" id="btn-mock">注入</button>
+            </div>
+            <p class="note">注入后由桥接轮询取走，和真机说一句话的效果完全一致。只有「演示模式」或依赖缺失时才可用；接真机后请用音箱说话测试。</p>
+            <div class="box-sub">
+              <h3>最近播报</h3>
+              <ul class="spoken" id="spoken-list"><li class="muted">暂无</li></ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 音箱接入 ================= -->
+      <section class="panel" data-panel="mi">
+        <div class="box">
+          <h2>小米账号与设备</h2>
+          <p class="hint">这一页决定「从哪台音箱取语音、往哪台音箱播报」。填完记得点保存，再回顶部启动桥接。</p>
+
+          <div class="form" data-section="mi">
+            <label>小米账号
+              <input name="username" autocomplete="off" placeholder="手机号 / 邮箱 / 小米 ID">
+              <span class="note">登录小米云用。<b class="warn">建议专门开个小号</b>：同一账号在别处登录会顶掉手机上的小爱 App。</span>
+            </label>
+
+            <label>密码
+              <input name="password" type="password" autocomplete="off" placeholder="留空或保持掩码表示不修改">
+              <span class="note">明文只存本机 <code>data/config.json</code>（权限 0600），不经过任何第三方。输入框留空＝保持原密码不变。</span>
+            </label>
+
+            <label>设备 DID
+              <input name="did" placeholder="点下方「发现设备」后点一行自动填入">
+              <span class="note">音箱的唯一标识。家里有多台就填要接管的那台；留空则默认取账号下第一台。</span>
+            </label>
+
+            <label>硬件型号
+              <select name="hardware">
+                <option value="LX06">LX06 · 小爱音箱 Pro</option>
+                <option value="L06A">L06A · 小爱音箱 Pro</option>
+                <option value="L05B">L05B · 小爱音箱 Play</option>
+                <option value="L05C">L05C · Play 增强版</option>
+                <option value="L07A">L07A · 小爱音箱 Art</option>
+                <option value="LX5A">LX5A · 小米 AI 音箱</option>
+                <option value="X08A">X08A · 小爱音箱 HD</option>
+                <option value="X10A">X10A · 小爱触屏音箱</option>
+                <option value="LX04">LX04 · 触屏音箱</option>
+                <option value="MOCK">MOCK · 演示</option>
+              </select>
+              <span class="note">只影响能力判断（是否走播放/音量接口），纯文本播报一般填错也能用。不确定就按「发现设备」里显示的型号选。</span>
+            </label>
+
+            <label>轮询间隔（秒）
+              <input name="poll_interval" type="number" step="0.5" min="0.5" value="1">
+              <span class="note"><b class="warn">别低于 1 秒</b>：小爱对话记录来自小米云接口，太频繁会被限流甚至短暂封号。1 秒的手感已经接近实时。</span>
+            </label>
+
+            <label class="chk full">
+              <input type="checkbox" name="mock">
+              <span class="chk-t">演示模式（不连小米云）</span>
+              <span class="note">勾上后完全不走小米接口，用「总览 → 模拟发问」验证整条链路。首次体验、改大模型配置时用它最省事；正式接管音箱时记得取消。</span>
+            </label>
+          </div>
+
+          <div class="row">
+            <button class="btn" id="btn-discover" title="读取账号下的音箱列表，不修改任何配置">发现设备</button>
+            <button class="btn" id="btn-diag-mi" title="完整走一遍登录流程，确认账号密码和验证码是否通过">测试登录</button>
+            <button class="btn primary" id="btn-save-mi">保存</button>
+          </div>
+
+          <div class="note-block">
+            <b>首次登录可能被要求验证码。</b>小米会在新设备或新 IP 上下发短信/邮箱验证码，弹出的输入框填一次即可；通过后 token 缓存在
+            <code>data/.mi.token</code>，之后不再重复索要。<b class="warn">删掉这个文件就要重新验证。</b>
+          </div>
+
+          <div class="otp" id="otp-box" hidden>
+            <span>登录需要验证码：</span>
+            <input id="otp-input" placeholder="输入短信/邮箱验证码">
+            <button class="btn" id="btn-otp">提交</button>
+          </div>
+
+          <div class="result" id="mi-result">尚未测试。</div>
+
+          <table class="tbl" id="dev-table" hidden>
+            <thead><tr><th>设备名</th><th>型号</th><th>DID</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="note" id="dev-note" hidden>点击任意一行即可把该设备的 DID 填入上方表单。</p>
+        </div>
+      </section>
+
+      <!-- ================= 大模型 ================= -->
+      <section class="panel" data-panel="llm">
+        <div class="box">
+          <h2>大模型接入</h2>
+          <p class="hint">任何 OpenAI 兼容端点都能接，工作台统一走 <code>/chat/completions</code>，不需要装 SDK。</p>
+
+          <div class="form" data-section="llm">
+            <label class="full">接口地址
+              <input name="base_url" placeholder="https://api.deepseek.com/v1">
+              <span class="note">填到 <code>/v1</code> 为止即可，工作台自动拼 <code>/chat/completions</code>。前面不要带空格，末尾不要多写路径。</span>
+            </label>
+
+            <label class="full">API Key
+              <input name="api_key" type="password" autocomplete="off" placeholder="留空或保持掩码表示不修改">
+              <span class="note">只存本机 <code>data/config.json</code>。输入框留空＝保持原 Key 不变；想换 Key 就直接覆盖输入。</span>
+            </label>
+
+            <label>模型名
+              <input name="model" placeholder="deepseek-chat">
+              <span class="note">必须和该端点注册的模型名完全一致，写错会返回 <code>model not found</code>。点「测试连通」能立刻验证。</span>
+            </label>
+
+            <label>温度
+              <input name="temperature" type="number" step="0.1" min="0" max="2" value="0.3">
+              <span class="note">改代码建议 0～0.4。<b class="warn">超过 0.7 容易乱猜文件名和行号</b>，语音场景也不需要创造性。</span>
+            </label>
+
+            <label>最大工具轮次
+              <input name="max_tool_rounds" type="number" min="1" max="20" value="6">
+              <span class="note">一次提问里最多连续调用几次工具。太小做不完「先看代码再改再跑测试」，太大会空转烧钱。默认 6 够用。</span>
+            </label>
+
+            <label>超时（秒）
+              <input name="timeout" type="number" min="10" max="600" value="90">
+              <span class="note">单次请求上限。<b class="warn">推理型模型经常超过 90 秒</b>，用它们要调到 180 以上，否则会被判超时重试。</span>
+            </label>
+          </div>
+
+          <div class="row">
+            <button class="btn" id="btn-diag-llm" title="发一句最小请求，验证地址、Key、模型名三件事">测试连通</button>
+            <button class="btn primary" id="btn-save-llm">保存</button>
+          </div>
+          <div class="result" id="llm-result">尚未测试。</div>
+
+          <div class="note-block">
+            <b>常用端点</b>（直接复制到上面的接口地址）：
+            <ul>
+              <li>DeepSeek <code>https://api.deepseek.com/v1</code> · 模型 <code>deepseek-chat</code></li>
+              <li>通义千问 <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code> · 模型 <code>qwen-plus</code></li>
+              <li>智谱 <code>https://open.bigmodel.cn/api/paas/v4</code> · 模型 <code>glm-4-flash</code></li>
+              <li>月之暗面 <code>https://api.moonshot.cn/v1</code> · 模型 <code>moonshot-v1-8k</code></li>
+              <li>本地 Ollama <code>http://127.0.0.1:11434/v1</code> · 模型 <code>qwen2.5:7b</code>（Key 随便填，本地不校验）</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= Agent ================= -->
+      <section class="panel" data-panel="agent">
+        <div class="box">
+          <h2>Agent 与执行沙箱</h2>
+          <p class="hint">这一页决定「模型能对代码做什么」。语音误触发是真实存在的——麦克风听到「跑一下」就动手，所以白名单和目录约束默认是收紧的。</p>
+
+          <div class="form" data-section="agent">
+            <label class="full">仓库根目录
+              <input name="repo" placeholder="/Users/you/project">
+              <span class="note">Agent 所有命令的执行目录，也是读写的边界。<b class="warn">指向 git 仓库根最稳</b>，别填主目录或整块磁盘——它越界会被工作台直接拒绝。</span>
+            </label>
+
+            <label class="full">命令白名单（逗号分隔首命令）
+              <input name="allowed_cmds">
+              <span class="note">只校验<b>第一个词</b>，例如 <code>pytest -q</code> 看的是 <code>pytest</code>。命令里出现 <code>; | &amp; &gt; &lt; ` $()</code> 一律拒绝，所以写不进花式组合命令。</span>
+            </label>
+
+            <label>命令超时（秒）
+              <input name="shell_timeout" type="number" min="5" max="600" value="120">
+              <span class="note">单条命令跑太久会被杀掉，不会留下僵死进程。全量测试慢就把这个调大。</span>
+            </label>
+
+            <label>输出截断（字符）
+              <input name="max_output" type="number" min="500" max="20000" value="4000">
+              <span class="note">回传给模型的输出上限。<b class="warn">调太大既撑爆上下文又烧钱</b>，日志类的建议别超过 8000。</span>
+            </label>
+
+            <label class="chk full">
+              <input type="checkbox" name="allow_write">
+              <span class="chk-t">允许 Agent 写文件</span>
+              <span class="note">关掉后它只能读不能改，最安全但也无法「顺手修一下」。默认开启，因为写操作同样被限制在仓库目录内。</span>
+            </label>
+
+            <label class="full">系统提示词
+              <textarea name="system_prompt" rows="7"></textarea>
+              <span class="note">决定它的说话方式和动手习惯。默认要求口语化、三句话内、先给结论——因为回答要靠 TTS 念出来，长段落听着受罪。</span>
+            </label>
+          </div>
+
+          <div class="row">
+            <button class="btn primary" id="btn-save-agent">保存</button>
+          </div>
+
+          <div class="note-block warn-block">
+            <b>已内置的硬性拒绝</b>（改不了，写在代码里）：<code>rm -rf</code>、<code>sudo</code>、<code>mkfs</code>、<code>dd if=</code>、<code>git push --force</code>、<code>curl | sh</code>、重定向与管道串接；文件读写越出仓库根目录也会被拦下。
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 语音 ================= -->
+      <section class="panel" data-panel="voice">
+        <div class="box">
+          <h2>唤醒词与播报</h2>
+          <p class="hint">小爱仍会先自己回答一遍，工作台是抢在它之后覆盖播报。所以唤醒词要足够特别，避免日常聊天被误接管。</p>
+
+          <div class="form" data-section="voice">
+            <label class="full">唤醒词（逗号分隔，任一命中即接管）
+              <input name="wake_words">
+              <span class="note">句子里<b>包含</b>任一词就触发，命中后会把该词从提问里删掉再交给模型。<b class="warn">别放「测试」「一下」这种日常词</b>，否则聊天全被接管。</span>
+            </label>
+
+            <label>播报字数上限
+              <input name="tts_max_chars" type="number" min="40" max="600" value="160">
+              <span class="note">TTS 是整段合成、<b class="warn">说出口就无法打断</b>。超过 200 字会念很久，长内容建议留在「会话记录」里看。</span>
+            </label>
+
+            <label>连续对话窗口（秒）
+              <input name="continuous_window" type="number" min="0" max="120" value="0">
+              <span class="note">大于 0 时，上一轮结束后 N 秒内的追问不必再说唤醒词。<b class="warn">代价是更容易把闲聊卷进来</b>，默认 0（关闭）。</span>
+            </label>
+
+            <label>应答语
+              <input name="ack" placeholder="收到">
+              <span class="note">先播这句再开始思考，缓解模型响应期间的静默。留空则不播。</span>
+            </label>
+
+            <label class="chk">
+              <input type="checkbox" name="ack_enabled">
+              <span class="chk-t">播报应答语</span>
+              <span class="note">关掉可以省一次云端调用，但等待时会完全没有反馈。</span>
+            </label>
+
+            <label class="chk">
+              <input type="checkbox" name="speak">
+              <span class="chk-t">语音播报回答</span>
+              <span class="note">关掉后只记日志不出声，适合调试阶段——先看回答对不对，再开声音。</span>
+            </label>
+          </div>
+
+          <div class="row">
+            <button class="btn primary" id="btn-save-voice">保存</button>
+            <input id="tts-input" type="text" placeholder="试播一句话">
+            <button class="btn" id="btn-tts" title="直接把这句话送到音箱念出来，用来验证 DID 和连接是否正常">试播</button>
+          </div>
+          <div class="result" id="voice-result">语音只播摘要，长内容留在会话记录里。</div>
+
+          <div class="note-block">
+            <b>播报链路</b>：模型回答 → 去掉 Markdown 与代码块（压成「代码略」）→ 按句子边界截到上限 → 注入音箱。
+            所以回答里的细节不会念出来，想听完整内容就放长字数上限，或者到「会话记录」看原文。
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 历史 ================= -->
+      <section class="panel" data-panel="history">
+        <div class="box">
+          <div class="row between">
+            <h2>会话记录</h2>
+            <div class="row">
+              <button class="btn" id="btn-hist-refresh">刷新</button>
+              <button class="btn danger" id="btn-hist-clear" title="清空本机记录文件，不影响音箱和模型配置">清空</button>
+            </div>
+          </div>
+          <p class="note">最多保留最近 500 轮，存在 <code>data/history.json</code>。每条都带工具调用明细，是排查「它到底干了什么」最直接的地方。</p>
+          <div class="turns" id="turns"><p class="muted">暂无记录。</p></div>
+        </div>
+      </section>
+
+      <!-- ================= 日志 ================= -->
+      <section class="panel" data-panel="logs">
+        <div class="box">
+          <div class="row between">
+            <h2>运行日志</h2>
+            <div class="row">
+              <label class="chk-inline"><input type="checkbox" id="log-autoscroll" checked> 自动滚到底</label>
+            </div>
+          </div>
+          <p class="note">实时推送（SSE）。同时落盘到 <code>data/console.log</code>，超过 4 MB 自动只保留最近 2000 行。</p>
+          <pre class="log-full" id="log-full"></pre>
+        </div>
+      </section>
+
+
+      <!-- ================= 迁移与环境 ================= -->
+      <section class="panel" data-panel="portable">
+        <div class="box">
+          <h2>这套东西能不能搬走</h2>
+          <div class="note-block">
+            <b>不需要同一个局域网。</b>路线 B 走的是小米云接口：音箱连你家 WiFi 上报语音，工作台从云端取对话、再把播报推回云端，两端都不需要互相看见对方的 IP。
+            <b class="warn">只有两种情况才要求同网段</b>：用本地 Ollama 当模型（地址填 <code>127.0.0.1</code> 就是「哪台机器跑工作台就用哪台的模型」），以及以后升级到路线 C/D（局域网直连音箱）。
+          </div>
+        </div>
+
+        <div class="box">
+          <h2>环境体检</h2>
+          <p class="hint">换电脑后先点这里。它会逐项检查 Python、依赖、目录权限、端口、配置完整性和旧机器残留路径。</p>
+          <div class="row">
+            <button class="btn primary" id="btn-selfcheck" title="检查本机能否正常运行，不会改动任何配置">开始体检</button>
+            <span class="muted" id="selfcheck-summary"></span>
+          </div>
+          <div class="checks" id="checks"><p class="muted">还没有体检结果。</p></div>
+        </div>
+
+        <div class="grid2">
+          <div class="box">
+            <h2>搬配置（推荐）</h2>
+            <p class="note">导出成一段 JSON，在新电脑上粘进去即可。<b>机器相关的路径会自动重写</b>（token 缓存、仓库目录），不会带着旧机器的绝对路径过去。</p>
+            <div class="row">
+              <button class="btn" id="btn-export-safe" title="不含小米密码和模型 Key，适合发给自己但不放心明文">导出（不含密钥）</button>
+              <button class="btn" id="btn-export-full" title="包含全部凭据，注意别外传">导出（含密钥）</button>
+            </div>
+            <p class="note" id="export-hint">导出为文件，默认存到下载目录。</p>
+            <label class="imp-label">导入配置
+              <textarea id="import-box" rows="8" placeholder="把导出的 JSON 整段粘到这里，或直接把 .json 文件拖进来"></textarea>
+            </label>
+            <div class="row">
+              <button class="btn primary" id="btn-import">导入</button>
+              <input type="file" id="import-file" accept=".json,application/json" hidden>
+              <button class="btn" id="btn-import-file">选择文件</button>
+            </div>
+            <p class="note">导入后旧密码/Key 为空时不会覆盖本机已有值；桥接在跑的话记得点顶部「重启」。</p>
+          </div>
+
+          <div class="box">
+            <h2>本机信息</h2>
+            <table class="tbl" id="machine-table">
+              <tbody><tr><td class="muted">尚未读取</td></tr></tbody>
+            </table>
+            <div class="note-block">
+              <b>三种搬法，按省事程度排：</b>
+              <ul>
+                <li><b>整目录复制</b>（最省事）：把 <code>xiaoai-console</code> 整个文件夹拷到新电脑，删掉 <code>.venv</code> 再跑 <code>./start.sh</code>，依赖会重装、配置全保留。</li>
+                <li><b>只搬配置</b>：新电脑重新解压项目 → <code>./start.sh</code> → 在这里导入上面导出的 JSON。</li>
+                <li><b>重新填</b>：账号密码、Key 各填一次，5 分钟内搞定，最干净。</li>
+              </ul>
+              <b class="warn">别直接把 .venv 拷过去</b>：虚拟环境里写死了旧机器的 Python 绝对路径，换机必坏。
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <footer class="logbar" id="logbar">
+    <div class="logbar-head">
+      <span class="logbar-title">实时日志</span>
+      <span class="logbar-dot" id="sse-dot"></span>
+      <button class="mini" id="btn-log-toggle">收起</button>
+    </div>
+    <pre class="log-mini" id="log-mini"></pre>
+  </footer>
+
+  <div class="toast" id="toast"></div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

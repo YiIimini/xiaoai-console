@@ -1,0 +1,491 @@
+/* 小爱同学 · 大模型工作台 —— 前端。零构建，原生 JS。 */
+(() => {
+  "use strict";
+
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const SECRET_FIELDS = new Set(["password", "api_key"]);
+
+  let STATE = null;
+  const LOGS = [];
+  const SEEN = new Set();      // 日志去重：SSE 重连会重放
+  let LAST_SEQ = 0;
+  const DIRTY = new Set();     // 用户改过但还没保存的配置分区
+
+  /* ------------------------------------------------ 基础请求 */
+  async function api(path, body) {
+    const opt = body === undefined
+      ? { method: "GET" }
+      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+    const res = await fetch(path, opt);
+    let data;
+    try { data = await res.json(); } catch { data = { ok: false, error: "响应解析失败" }; }
+    if (!res.ok && data.ok !== false) data = { ok: false, error: data.error || ("HTTP " + res.status) };
+    return data;
+  }
+
+  let toastTimer = null;
+  function toast(msg, bad) {
+    const el = $("#toast");
+    el.textContent = msg;
+    el.classList.toggle("bad", !!bad);
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+  }
+
+  function tstr(ts) {
+    const d = new Date((ts || 0) * 1000);
+    return d.toTimeString().slice(0, 8);
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, c => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+  }
+
+  /* ------------------------------------------------ 导航 */
+  $$(".nav-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      $$(".nav-item").forEach(b => b.classList.remove("active"));
+      $$(".panel").forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      const tab = btn.dataset.tab;
+      const panel = $(`[data-panel="${tab}"]`);
+      if (panel) panel.classList.add("active");
+      if (tab === "history") loadHistory();
+      if (tab === "portable") runSelfcheck();
+    });
+  });
+
+  /* ------------------------------------------------ 配置表单 */
+  function fillForm(section, cfg) {
+    const box = $(`.form[data-section="${section}"]`);
+    if (!box || !cfg) return;
+    $$("input,select,textarea", box).forEach(el => {
+      const name = el.name;
+      if (!name) return;
+      const v = cfg[name];
+      if (el.type === "checkbox") {
+        el.checked = !!v;
+      } else if (SECRET_FIELDS.has(name)) {
+        el.value = "";
+        el.placeholder = v ? "已配置（留空则不修改）" : (el.getAttribute("data-ph") || "");
+      } else {
+        el.value = v == null ? "" : v;
+      }
+    });
+  }
+
+  function collectForm(section) {
+    const box = $(`.form[data-section="${section}"]`);
+    const out = {};
+    if (!box) return out;
+    $$("input,select,textarea", box).forEach(el => {
+      const name = el.name;
+      if (!name) return;
+      if (el.type === "checkbox") { out[name] = el.checked; return; }
+      const raw = el.value;
+      if (SECRET_FIELDS.has(name)) {
+        if (raw.trim()) out[name] = raw.trim();     // 空 = 不修改
+        return;
+      }
+      if (raw === "") return;
+      out[name] = el.type === "number" ? Number(raw) : raw;
+    });
+    return out;
+  }
+
+  const SECTIONS = ["mi", "llm", "agent", "voice"];
+
+  function fillAll(cfg, force) {
+    SECTIONS.forEach(s => {
+      if (force || !DIRTY.has(s)) fillForm(s, cfg[s]);
+    });
+  }
+
+  // 用户一敲键盘就标记为「脏」，后台轮询不再回填，避免把正在输入的内容冲掉
+  function bindDirtyTracking() {
+    SECTIONS.forEach(sec => {
+      const box = $(`.form[data-section="${sec}"]`);
+      if (!box) return;
+      const mark = () => DIRTY.add(sec);
+      box.addEventListener("input", mark);
+      box.addEventListener("change", mark);
+    });
+  }
+
+  async function saveSection(section) {
+    const patch = {};
+    patch[section] = collectForm(section);
+    const r = await api("/api/config", patch);
+    if (!r.ok) { toast(r.error || "保存失败", true); return null; }
+    STATE = STATE || {};
+    STATE.config = r.config;
+    DIRTY.delete(section);
+    fillForm(section, r.config[section]);
+    toast("配置已保存");
+    return r.config;
+  }
+
+  /* ------------------------------------------------ 状态渲染 */
+  function renderState(st) {
+    STATE = st;
+    const b = st.bridge || {};
+    const stt = b.state || "stopped";
+    const map = { stopped: "已停止", starting: "启动中", running: "运行中", error: "异常" };
+    const cls = stt === "running" ? "ok" : stt === "error" ? "err" : stt === "starting" ? "warn" : "";
+
+    const pb = $("#pill-bridge");
+    pb.textContent = "桥接 " + (map[stt] || stt);
+    pb.className = "pill " + cls + (stt === "running" ? " live" : "");
+
+    const pm = $("#pill-mode");
+    pm.textContent = st.mock ? "演示模式" : "真机模式";
+    pm.className = "pill " + (st.mock ? "warn" : "live");
+
+    const pd = $("#pill-miservice");
+    pd.textContent = "依赖 " + (st.miservice ? "已安装" : "缺失");
+    pd.className = "pill " + (st.miservice ? "ok" : "err");
+
+    const stats = (b.stats || {});
+    $("#pill-turns").textContent = "语音回合 " + (stats.turns || 0);
+
+    $("#ov-state").textContent = map[stt] || stt;
+    $("#ov-uptime").textContent = b.uptime ? ("已运行 " + b.uptime + " 秒") : "未运行";
+    $("#ov-turns").textContent = stats.turns || 0;
+    $("#ov-polls").textContent = "轮询 " + (stats.polls || 0) + " 次 · 错误 " + (stats.errors || 0);
+    $("#ov-errors").textContent = stats.errors || 0;
+    $("#ov-errors").style.color = (stats.errors || 0) > 0 ? "var(--rd)" : "";
+    $("#ov-lasterr").textContent = stats.last_error || "—";
+    $("#ov-query").textContent = stats.last_query || "—";
+    $("#ov-answer").textContent = stats.last_answer ? stats.last_answer.slice(0, 160) : "—";
+
+    $("#btn-start").disabled = !!b.running;
+    $("#btn-stop").disabled = !b.running;
+
+    // 验证码提示
+    const otp = st.otp || {};
+    $("#otp-box").hidden = !otp.waiting;
+
+    // 播报列表
+    const sp = b.spoken || [];
+    $("#spoken-list").innerHTML = sp.length
+      ? sp.slice().reverse().map(s => `<li><time>${tstr(s.ts)}</time><span>${esc(s.text)}</span></li>`).join("")
+      : '<li class="muted">暂无</li>';
+  }
+
+  async function refresh() {
+    const st = await api("/api/state");
+    if (!st.ok) return;
+    renderState(st);
+    if (st.config) fillAll(st.config, false);
+  }
+
+  /* ------------------------------------------------ 桥接控制 */
+  async function bridgeCmd(cmd) {
+    const btn = $(cmd === "start" ? "#btn-start" : cmd === "stop" ? "#btn-stop" : "#btn-restart");
+    btn.disabled = true;
+    const r = await api("/api/bridge/" + cmd, {});
+    btn.disabled = false;
+    if (r.bridge) renderState({ ...(STATE || {}), bridge: r.bridge, config: (STATE || {}).config });
+    toast(r.ok ? ("桥接" + ({ start: "已启动", stop: "已停止", restart: "已重启" }[cmd] || "已操作")) : (r.error || "操作失败"), !r.ok);
+    setTimeout(refresh, 600);
+  }
+  $("#btn-start").addEventListener("click", () => bridgeCmd("start"));
+  $("#btn-stop").addEventListener("click", () => bridgeCmd("stop"));
+  $("#btn-restart").addEventListener("click", () => bridgeCmd("restart"));
+
+  /* ------------------------------------------------ 手动对话 */
+  $("#btn-chat").addEventListener("click", async () => {
+    const text = $("#chat-input").value.trim();
+    if (!text) return toast("先说点什么", true);
+    const box = $("#chat-result");
+    box.className = "result";
+    box.textContent = "思考中…";
+    const r = await api("/api/chat", { text, speak: $("#chat-speak").checked });
+    if (!r.ok) { box.className = "result err"; box.textContent = r.error || "失败"; return; }
+    const t = r.turn;
+    box.className = "result ok";
+    // 用 textContent 直接落纯文本，不要再做 HTML 转义（否则会出现 &quot;）
+    let out = `【回答】${t.answer}\n\n耗时 ${t.ms} ms`;
+    if (t.tool_calls && t.tool_calls.length) {
+      out += "\n\n" + t.tool_calls.map(c =>
+        `【工具】${c.name} (${c.ms}ms)\n参数 ${JSON.stringify(c.args)}\n结果 ${c.result}`
+      ).join("\n\n");
+    }
+    if (t.spoken) out += "\n\n已播报到音箱";
+    if (r.warn) out += "\n\n注意：" + r.warn;
+    box.textContent = out;
+  });
+
+  /* ------------------------------------------------ 模拟发问 */
+  $("#btn-mock").addEventListener("click", async () => {
+    const text = $("#mock-input").value.trim();
+    if (!text) return toast("填一句模拟语音", true);
+    const r = await api("/api/mock/say", { text });
+    toast(r.ok ? "已注入，等待桥接取走" : (r.error || "失败"), !r.ok);
+  });
+
+  /* ------------------------------------------------ 设备 / 诊断 */
+  function renderDevices(list, box) {
+    const tbl = $("#dev-table");
+    const tb = $("tbody", tbl);
+    tb.innerHTML = (list || []).map(d =>
+      `<tr><td>${esc(d.name || "—")}</td><td>${esc(d.hardware || "—")}</td><td><code>${esc(d.did)}</code></td></tr>`
+    ).join("");
+    tbl.hidden = !(list && list.length);
+    const dn = $("#dev-note");
+    if (dn) dn.hidden = !(list && list.length);
+    if (list && list.length) box.textContent = "发现 " + list.length + " 台设备。";
+    $$("#dev-table tbody tr").forEach(tr => {
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", () => {
+        const did = tr.querySelector("code").textContent;
+        $('#mi input[name="did"]').value = did;
+        toast("已填入 DID");
+      });
+    });
+  }
+
+  $("#btn-discover").addEventListener("click", async () => {
+    const box = $("#mi-result");
+    box.className = "result";
+    box.textContent = "正在读取设备列表…";
+    const r = await api("/api/devices");
+    if (!r.ok) { box.className = "result err"; box.textContent = r.error || "失败"; return; }
+    box.className = "result ok";
+    renderDevices(r.devices, box);
+  });
+
+  $("#btn-diag-mi").addEventListener("click", async () => {
+    const box = $("#mi-result");
+    box.className = "result";
+    box.textContent = "正在登录小米云…";
+    const r = await api("/api/diag/mi");
+    if (!r.ok) { box.className = "result err"; box.textContent = r.error || "登录失败"; return; }
+    box.className = "result ok";
+    box.textContent = `登录成功，用时 ${r.ms} ms。`;
+    renderDevices(r.devices, box);
+    refresh();
+  });
+
+  $("#btn-otp").addEventListener("click", async () => {
+    const code = $("#otp-input").value.trim();
+    if (!code) return toast("请输入验证码", true);
+    const r = await api("/api/mi/otp", { code });
+    toast(r.ok ? "已提交验证码" : (r.error || "失败"), !r.ok);
+    $("#otp-input").value = "";
+  });
+
+  $("#btn-diag-llm").addEventListener("click", async () => {
+    const box = $("#llm-result");
+    box.className = "result";
+    box.textContent = "正在请求模型…";
+    const r = await api("/api/diag/llm");
+    box.className = "result " + (r.ok ? "ok" : "err");
+    box.textContent = r.ok
+      ? `连通正常。模型 ${r.model} 回复：${r.reply}`
+      : (r.error || "失败");
+  });
+
+  $("#btn-save-mi").addEventListener("click", () => saveSection("mi").then(() => refresh()));
+  $("#btn-save-llm").addEventListener("click", () => saveSection("llm"));
+  $("#btn-save-agent").addEventListener("click", () => saveSection("agent"));
+  $("#btn-save-voice").addEventListener("click", () => saveSection("voice"));
+
+  /* ------------------------------------------------ 试播 */
+  $("#btn-tts").addEventListener("click", async () => {
+    const text = $("#tts-input").value.trim();
+    if (!text) return toast("填一句要播报的话", true);
+    const box = $("#voice-result");
+    box.className = "result";
+    box.textContent = "播报中…";
+    const r = await api("/api/tts", { text });
+    box.className = "result " + (r.ok ? "ok" : "err");
+    box.textContent = r.ok ? "已送到音箱播报。" : (r.error || "失败");
+  });
+
+  /* ------------------------------------------------ 会话记录 */
+  function turnHtml(t) {
+    const tags = [];
+    tags.push(`<span class="tag ${t.source === "voice" ? "voice" : "manual"}">${t.source === "voice" ? "语音" : "手动"}</span>`);
+    if (t.error) tags.push('<span class="tag err">出错</span>');
+    if (t.spoken) tags.push('<span class="tag">已播报</span>');
+    const tools = (t.tool_calls || []).map(c =>
+      `<div class="tc"><span class="tc-name">${esc(c.name)}</span> · ${c.ms}ms · ${esc(JSON.stringify(c.args))}\n${esc(c.result)}</div>`
+    ).join("");
+    return `<div class="turn">
+      <div class="turn-h">${tags.join("")}<span>${tstr(t.ts)}</span><span>${t.ms || 0}ms</span></div>
+      <div class="turn-q"><b>问</b> ${esc(t.query)}</div>
+      <div class="turn-a"><b>答</b> ${esc(t.answer || "")}</div>
+      ${tools}
+    </div>`;
+  }
+
+  async function loadHistory() {
+    const r = await api("/api/history?limit=100");
+    const box = $("#turns");
+    if (!r.ok) { box.innerHTML = '<p class="muted">读取失败</p>'; return; }
+    const items = r.items || [];
+    box.innerHTML = items.length
+      ? items.slice().reverse().map(turnHtml).join("")
+      : '<p class="muted">暂无记录。</p>';
+  }
+  $("#btn-hist-refresh").addEventListener("click", loadHistory);
+  $("#btn-hist-clear").addEventListener("click", async () => {
+    const r = await api("/api/history/clear", {});
+    toast(r.ok ? "已清空" : "失败", !r.ok);
+    loadHistory();
+  });
+
+
+  /* ------------------------------------------------ 迁移与环境 */
+  const LEVEL_TXT = { ok: "正常", warn: "注意", fail: "异常" };
+
+  function renderChecks(data) {
+    const box = $("#checks");
+    const rows = (data && data.rows) || [];
+    if (!rows.length) { box.innerHTML = '<p class="muted">没有结果。</p>'; return; }
+    box.innerHTML = rows.map(r => {
+      const fix = r.fix
+        ? `<div class="chk-fix">${r.name === "仓库路径" && r.level === "fail"
+            ? '<button class="mini" id="btn-default-repo">用本机默认路径</button> '
+            : ""}${esc(r.fix)}</div>`
+        : "";
+      return `<div class="chk-row ${r.level}">
+        <span class="chk-badge">${LEVEL_TXT[r.level] || r.level}</span>
+        <div class="chk-body"><div class="chk-name">${esc(r.name)}</div>
+        <div class="chk-detail">${esc(r.detail)}</div>${fix}</div>
+      </div>`;
+    }).join("");
+    const btn = $("#btn-default-repo");
+    if (btn) btn.addEventListener("click", async () => {
+      const r = await api("/api/portable/default-repo", {});
+      toast(r.ok ? "已改为 " + r.repo : (r.error || "失败"), !r.ok);
+      if (r.ok) runSelfcheck();
+    });
+  }
+
+  function renderMachine(m) {
+    if (!m) return;
+    const rows = [
+      ["主机名", m.host], ["系统", m.os], ["架构", m.arch],
+      ["Python", m.python], ["虚拟环境", m.venv ? "已启用" : "未启用"],
+      ["项目目录", m.project], ["数据目录", m.data],
+    ];
+    $("#machine-table tbody").innerHTML = rows.map(([k, v]) =>
+      `<tr><td style="color:var(--tx3);width:110px">${esc(k)}</td><td><code>${esc(v)}</code></td></tr>`
+    ).join("");
+  }
+
+  async function runSelfcheck() {
+    const sum = $("#selfcheck-summary");
+    sum.textContent = "检查中…";
+    const r = await api("/api/portable/selfcheck");
+    if (!r.ok) { sum.textContent = r.error || "失败"; return; }
+    renderChecks(r);
+    renderMachine(r.machine);
+    const s = r.summary || {};
+    sum.textContent = `通过 ${s.pass || 0} 项，注意 ${s.warn || 0} 项，异常 ${s.fail || 0} 项`;
+    sum.style.color = (s.fail || 0) > 0 ? "var(--rd)" : (s.warn || 0) > 0 ? "var(--am)" : "var(--gr)";
+  }
+  $("#btn-selfcheck").addEventListener("click", runSelfcheck);
+
+  async function exportConfig(withSecrets) {
+    const r = await api("/api/portable/export?secrets=" + (withSecrets ? "1" : "0"));
+    if (!r.ok) return toast(r.error || "导出失败", true);
+    const text = JSON.stringify(r.bundle, null, 2);
+    const blob = new Blob([text], { type: "application/json" });
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    a.href = URL.createObjectURL(blob);
+    a.download = `xiaoai-config-${stamp}${withSecrets ? "-with-secrets" : ""}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    $("#export-hint").textContent = withSecrets
+      ? "已导出（含密钥）。文件里有明文密码和 Key，别外传。"
+      : "已导出（不含密钥）。新机器导入后补填密码和 Key 即可。";
+    toast("已导出");
+  }
+  $("#btn-export-safe").addEventListener("click", () => exportConfig(false));
+  $("#btn-export-full").addEventListener("click", () => exportConfig(true));
+
+  async function doImport(text) {
+    if (!text || !text.trim()) return toast("先把配置粘进来", true);
+    const r = await api("/api/portable/import", { bundle: text.trim() });
+    if (!r.ok) return toast(r.error || "导入失败", true);
+    toast("导入成功，路径已按本机重写");
+    if (r.note) $("#export-hint").textContent = r.note;
+    await refresh();
+    runSelfcheck();
+  }
+  $("#btn-import").addEventListener("click", () => doImport($("#import-box").value));
+  $("#btn-import-file").addEventListener("click", () => $("#import-file").click());
+  $("#import-file").addEventListener("change", async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const text = await f.text();
+    $("#import-box").value = text;
+    doImport(text);
+    e.target.value = "";
+  });
+  // 支持直接拖拽 json 到文本框
+  $("#import-box").addEventListener("dragover", (e) => e.preventDefault());
+  $("#import-box").addEventListener("drop", async (e) => {
+    e.preventDefault();
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    const text = await f.text();
+    $("#import-box").value = text;
+    doImport(text);
+  });
+
+  /* ------------------------------------------------ 日志 */
+  function appendLog(rec) {
+    if (SEEN.has(rec.seq)) return;
+    if (SEEN.size > 6000) SEEN.clear();
+    SEEN.add(rec.seq);
+    if (rec.seq > LAST_SEQ) LAST_SEQ = rec.seq;
+    LOGS.push(rec);
+    if (LOGS.length > 3000) LOGS.splice(0, LOGS.length - 3000);
+    const line = `<span class="l-time">${tstr(rec.ts)}</span> <span class="l-${rec.level}">${esc(rec.msg)}</span>`;
+    const mini = $("#log-mini");
+    mini.insertAdjacentHTML("beforeend", line + "\n");
+    const full = $("#log-full");
+    full.insertAdjacentHTML("beforeend", line + "\n");
+    if (mini.scrollHeight - mini.scrollTop - mini.clientHeight < 60) mini.scrollTop = mini.scrollHeight;
+    if ($("#log-autoscroll").checked && $('[data-panel="logs"]').classList.contains("active")) {
+      full.scrollTop = full.scrollHeight;
+    }
+  }
+
+  function connectSSE() {
+    const es = new EventSource("/api/logs/stream?after=" + LAST_SEQ);
+    es.onopen = () => $("#sse-dot").classList.add("on");
+    es.onerror = () => $("#sse-dot").classList.remove("on");
+    es.onmessage = ev => {
+      try { appendLog(JSON.parse(ev.data)); } catch { /* 忽略坏帧 */ }
+    };
+  }
+
+  $("#btn-log-toggle").addEventListener("click", () => {
+    const bar = $("#logbar");
+    bar.classList.toggle("collapsed");
+    $("#btn-log-toggle").textContent = bar.classList.contains("collapsed") ? "展开" : "收起";
+  });
+
+  /* ------------------------------------------------ 启动 */
+  (async function boot() {
+    // 记住初始 placeholder，secret 字段清空后回落
+    $$(".form input").forEach(el => {
+      if (SECRET_FIELDS.has(el.name)) el.setAttribute("data-ph", el.placeholder || "");
+    });
+    bindDirtyTracking();
+    await refresh();
+    const last = await api("/api/logs?limit=200");
+    if (last.ok) (last.items || []).forEach(appendLog);
+    connectSSE();
+    setInterval(refresh, 3000);
+  })();
+})();
