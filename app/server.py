@@ -14,13 +14,14 @@ import asyncio
 import json
 import mimetypes
 import os
+import queue
 import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
-from . import bridge, health, llm, miot, scenes, store
+from . import bridge, health, llm, memory, miot, scenes, store
 from .console import safe_print
 from .mi import OTP, MiError, miservice_available
 
@@ -123,6 +124,7 @@ class Handler(BaseHTTPRequestHandler):
                 "miservice": miservice_available(),
                 "otp": OTP.snapshot(),
                 "mock": bool(cfg["mi"].get("mock")) or not miservice_available(),
+                "memory": memory.MEM.stats(),
                 "version": "1.0.0",
             })
         if path == "/api/history":
@@ -140,6 +142,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/portable/export":
             secrets = qs.get("secrets", ["0"])[0] in ("1", "true", "yes")
             return self._json({"ok": True, "bundle": store.export_config(secrets)})
+        if path == "/api/memory":
+            return self._json({"ok": True, **memory.MEM.stats()})
         if path == "/api/miot/devices":
             return self._miot_devices()
         if path == "/api/miot/spec":
@@ -191,6 +195,12 @@ class Handler(BaseHTTPRequestHandler):
                 OTP.provide(code)
                 LOG.info("已提交验证码")
                 return self._json({"ok": True})
+            if path == "/api/memory/clear":
+                memory.MEM.clear()
+                LOG.info("对话记忆已清空")
+                return self._json({"ok": True, **memory.MEM.stats()})
+            if path == "/api/chat/stream":
+                return self._chat_stream(body)
             if path == "/api/miot/set":
                 try:
                     out = miot.write_prop(body.get("device", ""), body.get("prop", ""), body.get("value"))
@@ -277,6 +287,55 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 return self._json({"ok": True, "turn": turn, "warn": "播报失败: %s" % e})
         return self._json({"ok": True, "turn": turn})
+
+    def _chat_stream(self, body: Dict[str, Any]) -> None:
+        """SSE 流式对话：边生成边把增量推给前端。"""
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return self._err("内容为空")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def emit(obj: Dict[str, Any]) -> None:
+            try:
+                self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+
+        q: "queue.Queue[Optional[Dict[str, Any]]]" = queue.Queue()
+
+        def on_delta(delta: str) -> None:
+            q.put({"type": "delta", "text": delta})
+
+        def worker() -> None:
+            try:
+                turn = BR.run_agent(text, "manual", False, on_delta)
+                q.put({"type": "done", "turn": turn})
+            except Exception as e:  # noqa: BLE001
+                q.put({"type": "error", "error": "%s: %s" % (type(e).__name__, e)})
+            finally:
+                q.put(None)
+
+        LOG.info("⌨️  流式测试: %s" % text)
+        threading.Thread(target=worker, name="chat-stream", daemon=True).start()
+        try:
+            while True:
+                try:
+                    item = q.get(timeout=120)
+                except queue.Empty:
+                    emit({"type": "error", "error": "超时"})
+                    break
+                if item is None:
+                    break
+                emit(item)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _tts(self, body: Dict[str, Any]) -> None:
         text = str(body.get("text") or "").strip()
@@ -437,7 +496,20 @@ class Handler(BaseHTTPRequestHandler):
         if ctype.startswith("text/") or ctype in ("application/javascript", "application/json"):
             ctype += "; charset=utf-8"
         with open(full, "rb") as f:
-            self._send(200, f.read(), ctype)
+            body = f.read()
+        # 本地静态资源一律不缓存：升级后浏览器继续用旧 app.js 会出现
+        # 「按钮点了没反应」「新面板空白」这类假故障
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except Exception:
+            pass
 
 
 def _bind(host: str, want: int, span: int = 20):

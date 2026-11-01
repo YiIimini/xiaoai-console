@@ -186,6 +186,10 @@ class RealMiot:
         return self._svc
 
     async def _devices(self) -> List[Dict[str, Any]]:
+        ttl = float(store.load_config()["miot"].get("device_cache_seconds", 60) or 0)
+        cached = _read_cache("devices.json")
+        if ttl > 0 and cached and (time.time() - float(cached.get("ts", 0))) < ttl:
+            return cached.get("devices") or []
         svc = await self._ensure()
         rows = await svc.device_list()
         out = []

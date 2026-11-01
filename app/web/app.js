@@ -97,7 +97,7 @@
     return out;
   }
 
-  const SECTIONS = ["mi", "llm", "agent", "miot", "voice"];
+  const SECTIONS = ["mi", "llm", "agent", "miot", "voice", "memory"];
 
   function fillAll(cfg, force) {
     SECTIONS.forEach(s => {
@@ -169,6 +169,8 @@
     const otp = st.otp || {};
     $("#otp-box").hidden = !otp.waiting;
 
+    renderMemory(st.memory);
+
     // 播报列表
     const sp = b.spoken || [];
     $("#spoken-list").innerHTML = sp.length
@@ -201,23 +203,86 @@
   $("#btn-chat").addEventListener("click", async () => {
     const text = $("#chat-input").value.trim();
     if (!text) return toast("先说点什么", true);
+    await streamChat(text);
+  });
+
+  /* ------------------------------------------------ 记忆 */
+  function renderMemory(m) {
+    const box = $("#mem-stats");
+    if (!box) return;
+    if (!m) { box.textContent = "—"; return; }
+    const age = m.last_turn_age == null
+      ? "—"
+      : (m.last_turn_age < 60 ? m.last_turn_age + " 秒前" : Math.floor(m.last_turn_age / 60) + " 分钟前");
+    box.innerHTML = [
+      `已存 <b>${m.stored}</b> 条`,
+      `本轮上下文 <b>${m.in_context}</b> 轮`,
+      `上次对话 ${age}`,
+      m.enabled ? '<span class="tag voice">已启用</span>' : '<span class="tag err">已关闭</span>',
+    ].join("　·　");
+  }
+
+  /* ------------------------------------------------ 流式手动对话 */
+  async function streamChat(text) {
     const box = $("#chat-result");
     box.className = "result";
-    box.textContent = "思考中…";
-    const r = await api("/api/chat", { text, speak: $("#chat-speak").checked });
-    if (!r.ok) { box.className = "result err"; box.textContent = r.error || "失败"; return; }
-    const t = r.turn;
-    box.className = "result ok";
-    // 用 textContent 直接落纯文本，不要再做 HTML 转义（否则会出现 &quot;）
-    let out = `【回答】${t.answer}\n\n耗时 ${t.ms} ms`;
-    if (t.tool_calls && t.tool_calls.length) {
-      out += "\n\n" + t.tool_calls.map(c =>
-        `【工具】${c.name} (${c.ms}ms)\n参数 ${JSON.stringify(c.args)}\n结果 ${c.result}`
-      ).join("\n\n");
+    box.textContent = "";
+    let acc = "";
+    const res = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok || !res.body) {
+      box.className = "result err";
+      box.textContent = "请求失败：HTTP " + res.status;
+      return;
     }
-    if (t.spoken) out += "\n\n已播报到音箱";
-    if (r.warn) out += "\n\n注意：" + r.warn;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let finalTurn = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const line = chunk.split("\n").find(l => l.startsWith("data: "));
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+        if (ev.type === "delta") {
+          acc += ev.text;
+          box.textContent = acc;
+        } else if (ev.type === "done") {
+          finalTurn = ev.turn;
+        } else if (ev.type === "error") {
+          box.className = "result err";
+          box.textContent = "出错：" + (ev.error || "未知");
+          return;
+        }
+      }
+    }
+    if (!finalTurn) { box.className = "result err"; box.textContent = "没有拿到结果"; return; }
+    box.className = "result ok";
+    let out = `【回答】${finalTurn.answer}\n\n耗时 ${finalTurn.ms} ms`;
+    if (finalTurn.tool_calls && finalTurn.tool_calls.length) {
+      out += "\n\n" + finalTurn.tool_calls.map(c =>
+        `【工具】${c.name} (${c.ms}ms)\n参数 ${JSON.stringify(c.args)}\n结果 ${c.result}`).join("\n\n");
+    }
+    if (finalTurn.spoken) out += "\n\n已播报到音箱";
     box.textContent = out;
+    refresh();
+  }
+
+  $("#btn-save-memory").addEventListener("click", () => saveSection("memory").then(refresh));
+  $("#btn-clear-memory").addEventListener("click", async () => {
+    const r = await api("/api/memory/clear", {});
+    toast(r.ok ? "记忆已清空" : "失败", !r.ok);
+    if (r.ok) renderMemory(r);
   });
 
   /* ------------------------------------------------ 模拟发问 */

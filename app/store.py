@@ -48,6 +48,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "temperature": 0.3,
         "max_tool_rounds": 6,
         "timeout": 90,
+        "stream": True,
     },
     "agent": {
         "repo": os.environ.get("XIAOAI_REPO") or os.path.dirname(ROOT),
@@ -63,8 +64,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "allow_write": True,           # 关掉后米家只能读
         "blocked_keywords": "lock,doorlock,camera,ipc,gas,smoke,alarm,safe,doorbell,locker",
         "max_scene_steps": 50,
+        "device_cache_seconds": 60,
+    },
+    "memory": {
+        "enabled": True,
+        "persist": True,
+        "max_turns": 6,
+        "max_chars": 2000,
+        "ttl_minutes": 30,
     },
     "voice": {
+        "stream_speech": True,
         "wake_words": "小助手,跑一下,调试,报错,改一下,看看代码,构建,测试",
         "speak": True,
         "tts_max_chars": 160,

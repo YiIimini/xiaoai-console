@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from . import llm, store, tools
+from . import llm, memory, store, tools
 from .mi import MiError, make_speaker
 
 LOG = store.LOG
@@ -34,6 +35,74 @@ def to_speech(text: str, limit: int = 160) -> str:
         if idx > limit * 0.5:
             return cut[: idx + 1]
     return cut + "…"
+
+
+SENT_END = "。！？!?；;\n"
+
+
+class SentenceStream:
+    """把流式增量切成句子，够一句就交给播报。
+
+    两个必须处理的细节：
+      - 碎片太短（<min_len）先攒着，避免「好的。」这种半句反复起播
+      - 代码块整体跳过。围栏可能被切在两个 chunk 里，所以要记住
+        当前是否在代码块内，不能简单地按单个片段做正则替换
+    """
+
+    FENCE = "```"
+
+    def __init__(self, min_len: int = 6) -> None:
+        self.buf = ""
+        self.min_len = min_len
+        self.in_code = False
+
+    def _emit(self, piece: str, out: List[str]) -> None:
+        if not piece.strip():
+            return
+        clean = to_speech(CODE_FENCE.sub("", piece), 200)
+        if len(clean) >= self.min_len:
+            out.append(clean)
+
+    def feed(self, text: str) -> List[str]:
+        self.buf += text or ""
+        out: List[str] = []
+        while self.buf:
+            fence = self.buf.find(self.FENCE)
+            if self.in_code:
+                if fence < 0:
+                    self.buf = ""                 # 代码内容不播，直接丢
+                    break
+                self.buf = self.buf[fence + 3:]
+                self.in_code = False
+                continue
+
+            cut = -1
+            for i, ch in enumerate(self.buf):
+                if ch in SENT_END:
+                    cut = i
+                    break
+
+            if fence >= 0 and (cut < 0 or fence < cut):
+                self._emit(self.buf[:fence], out)   # 围栏前的散文照常念
+                self.buf = self.buf[fence + 3:]
+                self.in_code = True
+                continue
+            if cut < 0:
+                break
+            piece, self.buf = self.buf[: cut + 1], self.buf[cut + 1:]
+            self._emit(piece, out)
+        return out
+
+    def flush(self) -> List[str]:
+        rest, self.buf = self.buf, ""
+        if self.in_code or not rest.strip():
+            # 未闭合的代码块不播；空残句更不能播，
+            # 否则 to_speech("") 会吐出兜底句，凭空多一句废话
+            self.in_code = False
+            return []
+        out: List[str] = []
+        self._emit(rest, out)
+        return out
 
 
 class Bridge:
@@ -209,11 +278,31 @@ class Bridge:
                     vcfg = cfg["voice"]
                     if vcfg.get("ack_enabled") and (vcfg.get("ack") or "").strip():
                         await self._say(vcfg, vcfg["ack"])
-                    turn = await loop.run_in_executor(None, self.run_agent, query, "voice")
+                    spoken_stream = False
+                    on_delta = None
+                    drain_task = None
+                    sent_q: "queue.Queue[Optional[str]]" = queue.Queue()
+                    if cfg["voice"].get("speak", True) and cfg["voice"].get("stream_speech", True):
+                        splitter = SentenceStream()
+
+                        def on_delta(text: str, _sp=splitter, _q=sent_q) -> None:
+                            for sent in _sp.feed(text):
+                                _q.put(sent)
+
+                        drain_task = asyncio.ensure_future(self._drain_sentences(sent_q, cfg["voice"]))
+                    turn = await loop.run_in_executor(None, self.run_agent, query, "voice", False, on_delta)
+                    if drain_task is not None:
+                        for sent in splitter.flush():      # 收尾未成句的残句
+                            sent_q.put(sent)
+                        sent_q.put(None)
+                        spoken_stream = await drain_task
                     self.stats["turns"] += 1
                     self.stats["last_query"] = query
                     self.stats["last_answer"] = turn.get("answer", "")
-                    if cfg["voice"].get("speak", True):
+                    if spoken_stream:
+                        turn["spoken"] = True
+                        HIST.flush()
+                    elif cfg["voice"].get("speak", True):
                         if await self._say(cfg["voice"], turn.get("answer", "")):
                             turn["spoken"] = True
                             HIST.flush()
@@ -225,8 +314,27 @@ class Bridge:
                 continue
             await asyncio.sleep(interval)
 
+    async def _drain_sentences(self, q: "queue.Queue[Optional[str]]", voice_cfg: Dict[str, Any]) -> bool:
+        """边生成边播报：队列里有句子就送音箱，收到 None 结束。"""
+        spoke = False
+        while True:
+            try:
+                sent = q.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.05)
+                continue
+            if sent is None:
+                break
+            if await self._say(voice_cfg, sent):
+                spoke = True
+        return spoke
+
     async def _say(self, voice_cfg: Dict[str, Any], text: str) -> bool:
+        if not (text or "").strip():
+            return False
         speech = to_speech(text, int(voice_cfg.get("tts_max_chars", 160)))
+        if not speech.strip():
+            return False
         try:
             await self.speaker.speak(speech)
             self.stats["spoken"].append({"ts": time.time(), "text": speech})
@@ -257,7 +365,8 @@ class Bridge:
         return out or q
 
     # ------------------------------------------------------------ Agent 单轮
-    def run_agent(self, query: str, source: str = "manual", speak: bool = False) -> Dict[str, Any]:
+    def run_agent(self, query: str, source: str = "manual", speak: bool = False,
+                  on_delta: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
         cfg = store.load_config()
         agent_cfg = cfg["agent"]
         llm_cfg = cfg["llm"]
@@ -271,14 +380,25 @@ class Bridge:
             "error": "",
             "spoken": False,
         }
+        # 记忆：把最近几轮问答拼在系统提示之后、本轮提问之前
+        mem_ctx = memory.MEM.context()
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": agent_cfg.get("system_prompt") or ""},
-            {"role": "user", "content": query},
         ]
+        if mem_ctx:
+            messages.append({
+                "role": "system",
+                "content": "以下是最近的对话，可作为上下文参考；与当前问题无关就忽略。",
+            })
+            messages.extend(mem_ctx)
+        messages.append({"role": "user", "content": query})
         try:
             rounds = int(llm_cfg.get("max_tool_rounds", 6))
             for _ in range(max(1, rounds)):
-                msg = llm.chat(messages, llm_cfg, tools.TOOL_SPECS)
+                if on_delta is not None and llm_cfg.get("stream", True):
+                    msg = llm.stream_or_chat(messages, llm_cfg, tools.TOOL_SPECS, on_delta)
+                else:
+                    msg = llm.chat(messages, llm_cfg, tools.TOOL_SPECS)
                 calls = msg.get("tool_calls") or []
                 if not calls:
                     turn["answer"] = (msg.get("content") or "").strip()
@@ -323,6 +443,8 @@ class Bridge:
 
         turn["ms"] = int((time.time() - started) * 1000)
         HIST.add(turn)
+        if not turn["error"]:
+            memory.MEM.add(query, turn["answer"], source)
         return turn
 
 
