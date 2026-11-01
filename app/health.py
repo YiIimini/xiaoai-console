@@ -84,6 +84,29 @@ def check(port: int = 0) -> Dict[str, Any]:
     else:
         rows.append(_row(WARN, "大模型 Key", "未配置", "在「大模型」填 API Key，任何 OpenAI 兼容端点都行"))
 
+    # 6.5) 米家接入
+    miot_cfg = cfg.get("miot") or {}
+    if not miot_cfg.get("enabled", True):
+        rows.append(_row(OK, "米家接入", "已关闭"))
+    else:
+        mode = "演示设备" if (miot_cfg.get("mock") or cfg["mi"].get("mock")) else "真实设备"
+        write = "可写" if miot_cfg.get("allow_write", True) else "只读"
+        rows.append(_row(OK, "米家接入", "%s · %s" % (mode, write)))
+        try:
+            import json as _json
+            import os as _os
+
+            cache = _os.path.join(store.DATA_DIR, "miot-cache", "devices.json")
+            if _os.path.exists(cache):
+                with open(cache, "r", encoding="utf-8") as f:
+                    n = len((_json.load(f) or {}).get("devices") or [])
+                rows.append(_row(OK, "米家设备缓存", "%d 台（到「米家设备」刷新可更新）" % n))
+            else:
+                rows.append(_row(WARN, "米家设备缓存", "还没拉过设备列表",
+                                 "到「米家设备」点「刷新设备」"))
+        except Exception:
+            pass
+
     # 7) token 缓存
     if cfg["mi"].get("mock") and has_user:
         rows.append(_row(WARN, "运行模式", "演示模式 + 账号已填写",

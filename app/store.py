@@ -57,6 +57,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_output": 4000,
         "allow_write": True,
     },
+    "miot": {
+        "enabled": True,
+        "mock": False,                 # 跟随 mi.mock 即可，一般不用单独开
+        "allow_write": True,           # 关掉后米家只能读
+        "blocked_keywords": "lock,doorlock,camera,ipc,gas,smoke,alarm,safe,doorbell,locker",
+        "max_scene_steps": 50,
+    },
     "voice": {
         "wake_words": "小助手,跑一下,调试,报错,改一下,看看代码,构建,测试",
         "speak": True,

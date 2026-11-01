@@ -40,6 +40,7 @@
       <button class="nav-item" data-tab="agent">Agent 与沙箱</button>
       <button class="nav-item" data-tab="voice">语音播报</button>
       <button class="nav-item" data-tab="history">会话记录</button>
+      <button class="nav-item" data-tab="miot">米家设备</button>
       <button class="nav-item" data-tab="logs">运行日志</button>
       <button class="nav-item" data-tab="portable">迁移与环境</button>
       <div class="nav-foot">
@@ -422,6 +423,76 @@
               </ul>
               <b class="warn">别直接把 .venv 拷过去</b>：虚拟环境里写死了旧机器的 Python 绝对路径，换机必坏。
             </div>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- ================= 米家设备 ================= -->
+      <section class="panel" data-panel="miot">
+        <div class="box">
+          <h2>米家接入开关</h2>
+          <p class="hint">和音箱共用同一个小米账号，不需要额外授权。设备能力会按型号从 miot-spec.org 拉取并缓存，第一次查询某型号会慢一两秒。</p>
+          <div class="form" data-section="miot">
+            <label class="chk full">
+              <input type="checkbox" name="enabled">
+              <span class="chk-t">启用米家接入</span>
+              <span class="note">关掉后语音里的「开灯」类指令一律不执行，模型也拿不到米家工具。</span>
+            </label>
+            <label class="chk full">
+              <input type="checkbox" name="allow_write">
+              <span class="chk-t">允许写入设备</span>
+              <span class="note">关掉后只能读状态。<b class="warn">语音误触发是真实存在的</b>，调试阶段建议先关着。</span>
+            </label>
+            <label class="chk full">
+              <input type="checkbox" name="mock">
+              <span class="chk-t">用演示设备（不连真实米家）</span>
+              <span class="note">内置客厅灯 / 主卧空调 / 书桌插座 / 大门锁四台假设备，用来验证整条链路。不勾但音箱是演示模式时，也会自动用演示设备。</span>
+            </label>
+            <label class="full">高危设备关键字（逗号分隔，命中则只读）
+              <input name="blocked_keywords">
+              <span class="note"><b class="warn">门锁、摄像头、燃气、烟感永远不该让语音直接操作</b>。这里按型号或设备名做子串匹配，命中后写入和动作都会被拒绝。</span>
+            </label>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="btn-save-miot">保存</button>
+            <button class="btn" id="btn-miot-refresh">刷新设备</button>
+            <span class="muted" id="miot-summary"></span>
+          </div>
+        </div>
+
+        <div class="box">
+          <h2>设备</h2>
+          <table class="tbl" id="miot-table" hidden>
+            <thead><tr><th>设备</th><th>型号</th><th style="width:220px">操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="note" id="miot-empty">还没有加载设备。</p>
+          <pre class="result" id="miot-cap" hidden></pre>
+        </div>
+
+        <div class="box">
+          <h2>自定义场景</h2>
+          <p class="note">把一串设备操作打包成一个词，说「小助手，执行睡觉」就能一次做完。保存后立即可用，不需要重启。</p>
+          <div class="row">
+            <select id="scene-pick" style="flex:1"></select>
+            <button class="btn" id="btn-scene-run" title="按当前选中的场景立即执行一次">立即执行</button>
+          </div>
+          <label class="imp-label">场景定义（JSON）
+            <textarea id="scene-json" rows="14" spellcheck="false"></textarea>
+          </label>
+          <div class="row">
+            <button class="btn primary" id="btn-scene-save">保存场景</button>
+            <button class="btn" id="btn-scene-reload">重新载入</button>
+          </div>
+          <div class="note-block">
+            <b>步骤只有三种形式：</b>
+            <ul>
+              <li><code>{"device":"客厅灯","prop":"power","value":"开"}</code> — 写属性，开关类用 开/关，数值类直接给数字</li>
+              <li><code>{"device":"书桌插座","action":"toggle"}</code> — 执行动作，需要先查该设备的能力</li>
+              <li><code>{"delay":0.5}</code> — 等 0.5 秒，设备之间需要缓冲时用</li>
+            </ul>
+            单步失败不会中断整个场景，最后一起汇报成功和失败。保存前会校验结构，写错了当场提示。
           </div>
         </div>
       </section>

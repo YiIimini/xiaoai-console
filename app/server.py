@@ -20,7 +20,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
-from . import bridge, health, llm, store
+from . import bridge, health, llm, miot, scenes, store
 from .console import safe_print
 from .mi import OTP, MiError, miservice_available
 
@@ -140,6 +140,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/portable/export":
             secrets = qs.get("secrets", ["0"])[0] in ("1", "true", "yes")
             return self._json({"ok": True, "bundle": store.export_config(secrets)})
+        if path == "/api/miot/devices":
+            return self._miot_devices()
+        if path == "/api/miot/spec":
+            dev = qs.get("device", [""])[0]
+            try:
+                return self._json({"ok": True, "text": miot.capabilities(dev)})
+            except Exception as e:  # noqa: BLE001
+                return self._json({"ok": False, "error": str(e)}, 502)
+        if path == "/api/scenes":
+            return self._json({"ok": True, "scenes": scenes.load(),
+                               "path": os.path.relpath(scenes.SCENES_PATH, store.ROOT)})
         if path == "/api/portable/machine":
             return self._json({"ok": True, **health.machine_info()})
         if path.startswith("/api/"):
@@ -180,6 +191,25 @@ class Handler(BaseHTTPRequestHandler):
                 OTP.provide(code)
                 LOG.info("已提交验证码")
                 return self._json({"ok": True})
+            if path == "/api/miot/set":
+                try:
+                    out = miot.write_prop(body.get("device", ""), body.get("prop", ""), body.get("value"))
+                    return self._json({"ok": True, "result": out})
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"ok": False, "error": str(e)}, 400)
+            if path == "/api/miot/get":
+                try:
+                    out = miot.read_prop(body.get("device", ""), body.get("prop", ""))
+                    return self._json({"ok": True, "result": out})
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"ok": False, "error": str(e)}, 400)
+            if path == "/api/scenes":
+                return self._save_scenes(body)
+            if path == "/api/scenes/run":
+                try:
+                    return self._json({"ok": True, "result": scenes.run(body.get("name", ""))})
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"ok": False, "error": str(e)}, 400)
             if path == "/api/portable/import":
                 return self._portable_import(body)
             if path == "/api/portable/default-repo":
@@ -284,6 +314,32 @@ class Handler(BaseHTTPRequestHandler):
         ]
         from .mi import MockSpeaker
         return self._json({"ok": True, "devices": rows, "mock": isinstance(spk, MockSpeaker)})
+
+    def _miot_devices(self) -> None:
+        try:
+            client = miot.client()
+            devs = client.devices()
+            rows = []
+            for d in devs:
+                rows.append({**d, "blocked": miot.is_blocked(d)})
+            return self._json({"ok": True, "devices": rows, "mock": getattr(client, "is_mock", False)})
+        except Exception as e:  # noqa: BLE001
+            LOG.error("读取米家设备失败: %s" % e)
+            return self._json({"ok": False, "error": str(e)}, 502)
+
+    def _save_scenes(self, body: Dict[str, Any]) -> None:
+        incoming = body.get("scenes")
+        if isinstance(incoming, str):
+            try:
+                incoming = json.loads(incoming)
+            except ValueError as e:
+                return self._err("JSON 解析失败: %s" % e)
+        ok, msg = scenes.validate(incoming)
+        if not ok:
+            return self._err(msg)
+        scenes.save(incoming)
+        LOG.ok("场景已保存（共 %d 个）" % len(incoming))
+        return self._json({"ok": True, "scenes": incoming})
 
     def _portable_import(self, body: Dict[str, Any]) -> None:
         bundle = body.get("bundle")

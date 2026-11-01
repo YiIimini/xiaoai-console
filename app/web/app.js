@@ -55,6 +55,7 @@
       if (panel) panel.classList.add("active");
       if (tab === "history") loadHistory();
       if (tab === "portable") runSelfcheck();
+      if (tab === "miot") { loadMiotDevices(); loadScenes(false); }
     });
   });
 
@@ -96,7 +97,7 @@
     return out;
   }
 
-  const SECTIONS = ["mi", "llm", "agent", "voice"];
+  const SECTIONS = ["mi", "llm", "agent", "miot", "voice"];
 
   function fillAll(cfg, force) {
     SECTIONS.forEach(s => {
@@ -439,6 +440,111 @@
     const text = await f.text();
     $("#import-box").value = text;
     doImport(text);
+  });
+
+
+  /* ------------------------------------------------ 米家设备 */
+  let MIOT_DEVICES = [];
+
+  async function loadMiotDevices() {
+    const sum = $("#miot-summary");
+    sum.textContent = "读取中…";
+    const r = await api("/api/miot/devices");
+    if (!r.ok) {
+      sum.textContent = r.error || "读取失败";
+      sum.style.color = "var(--rd)";
+      $("#miot-table").hidden = true;
+      $("#miot-empty").hidden = false;
+      $("#miot-empty").textContent = "读取失败：" + (r.error || "");
+      return;
+    }
+    MIOT_DEVICES = r.devices || [];
+    sum.style.color = "";
+    sum.textContent = `共 ${MIOT_DEVICES.length} 台${r.mock ? "（演示设备）" : ""}`;
+    renderMiotTable();
+  }
+
+  function renderMiotTable() {
+    const tbl = $("#miot-table");
+    const tb = $("tbody", tbl);
+    $("#miot-empty").hidden = MIOT_DEVICES.length > 0;
+    tbl.hidden = MIOT_DEVICES.length === 0;
+    tb.innerHTML = MIOT_DEVICES.map((d, i) => `
+      <tr>
+        <td>${esc(d.name)}${d.blocked ? ' <span class="tag err">高危·只读</span>' : ""}</td>
+        <td><code>${esc(d.model)}</code></td>
+        <td>
+          <button class="mini" data-act="cap" data-i="${i}">查能力</button>
+          <button class="mini" data-act="get" data-i="${i}">读开关</button>
+          <button class="mini" data-act="toggle" data-i="${i}">切换开关</button>
+        </td>
+      </tr>`).join("");
+    $$("#miot-table .mini").forEach(b => b.addEventListener("click", () => miotAction(b.dataset.act, +b.dataset.i)));
+  }
+
+  async function miotAction(act, i) {
+    const dev = MIOT_DEVICES[i];
+    if (!dev) return;
+    const box = $("#miot-cap");
+    box.hidden = false;
+    box.className = "result";
+    if (act === "cap") {
+      box.textContent = "查询中…";
+      const r = await api("/api/miot/spec?device=" + encodeURIComponent(dev.name));
+      box.className = "result " + (r.ok ? "ok" : "err");
+      box.textContent = r.ok ? r.text : (r.error || "失败");
+      return;
+    }
+    const prop = "power";
+    if (act === "get") {
+      const r = await api("/api/miot/get", { device: dev.name, prop });
+      box.className = "result " + (r.ok ? "ok" : "err");
+      box.textContent = r.ok ? r.result : (r.error || "失败");
+      return;
+    }
+    // toggle：先读再取反
+    const cur = await api("/api/miot/get", { device: dev.name, prop });
+    if (!cur.ok) { box.className = "result err"; box.textContent = cur.error || "读取失败"; return; }
+    const isOn = /=\s*True/i.test(cur.result);
+    const r = await api("/api/miot/set", { device: dev.name, prop, value: isOn ? "关" : "开" });
+    box.className = "result " + (r.ok ? "ok" : "err");
+    box.textContent = r.ok ? r.result : (r.error || "失败");
+    toast(r.ok ? "已执行" : (r.error || "失败"), !r.ok);
+  }
+
+  $("#btn-miot-refresh").addEventListener("click", loadMiotDevices);
+  $("#btn-save-miot").addEventListener("click", () => saveSection("miot").then(loadMiotDevices));
+
+  /* ------------------------------------------------ 场景 */
+  async function loadScenes(fillEditor) {
+    const r = await api("/api/scenes");
+    if (!r.ok) return toast(r.error || "读取失败", true);
+    const scenes = r.scenes || {};
+    $("#scene-pick").innerHTML = Object.keys(scenes)
+      .map(k => `<option value="${esc(k)}">${esc(k)}（${((scenes[k] || {}).steps || []).length} 步）</option>`)
+      .join("") || '<option value="">（还没有场景）</option>';
+    // 只在「没被编辑过」时回填，避免冲掉用户正在写的内容
+    if (fillEditor !== false || !$("#scene-json").value.trim()) {
+      $("#scene-json").value = JSON.stringify(scenes, null, 2);
+    }
+  }
+
+  $("#btn-scene-save").addEventListener("click", async () => {
+    const r = await api("/api/scenes", { scenes: $("#scene-json").value });
+    toast(r.ok ? "场景已保存" : (r.error || "保存失败"), !r.ok);
+    if (r.ok) loadScenes(true);
+  });
+  $("#btn-scene-reload").addEventListener("click", () => loadScenes(true));
+  $("#btn-scene-run").addEventListener("click", async () => {
+    const name = $("#scene-pick").value;
+    if (!name) return toast("先选一个场景", true);
+    const box = $("#miot-cap");
+    box.hidden = false;
+    box.className = "result";
+    box.textContent = "执行中…";
+    const r = await api("/api/scenes/run", { name });
+    box.className = "result " + (r.ok ? "ok" : "err");
+    box.textContent = r.ok ? r.result : (r.error || "执行失败");
   });
 
   /* ------------------------------------------------ 日志 */

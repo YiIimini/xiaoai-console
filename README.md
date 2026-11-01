@@ -44,6 +44,10 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 |---|---|
 | ![会话](screenshots/ui-history.png) | ![迁移](screenshots/ui-portable.png) |
 
+| 米家设备与自定义场景 |
+|---|
+| ![米家](screenshots/ui-miot.png) |
+
 ## 三个高频问题
 
 **Q1：音箱要和跑工作台的机器在同一个局域网吗？**
@@ -108,7 +112,16 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 - **音箱接入**：账号、DID、硬件型号、轮询间隔、设备发现、登录诊断、验证码弹框
 - **大模型**：端点、Key、模型、温度、工具轮次上限、超时、连通测试
 - **Agent 与沙箱**：仓库根目录、命令白名单、超时、输出截断、写文件开关、系统提示词
-- **语音播报**：唤醒词表、播报字数上限、连续对话窗口、应答语、试播
+- **米家**
+
+| 配置项 | 注意 |
+|---|---|
+| 启用米家接入 | 关掉后模型拿不到米家工具，语音里的「开灯」不会执行 |
+| 允许写入设备 | 关掉只读。**调试阶段建议先关着**，语音误触发是真实存在的 |
+| 演示设备 | 内置 4 台假设备；不勾但音箱是演示模式时也会自动用假的 |
+| 高危设备关键字 | 门锁/摄像头/燃气/烟感**永远不该让语音直接操作**，命中即只读 |
+
+**语音播报**：唤醒词表、播报字数上限、连续对话窗口、应答语、试播
 - **会话记录**：每条含工具调用参数与结果、耗时、是否已播报
 - **运行日志**：SSE 实时流，底部常驻 + 全屏视图
 
@@ -148,6 +161,15 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 | 允许写文件 | 关掉最安全但无法「顺手修一下」，写操作同样被限制在仓库目录内 |
 | 系统提示词 | 决定了说话方式；默认要求口语化三句话内，因为要靠 TTS 念出来 |
 
+**米家**
+
+| 配置项 | 注意 |
+|---|---|
+| 启用米家接入 | 关掉后模型拿不到米家工具，语音里的「开灯」不会执行 |
+| 允许写入设备 | 关掉只读。**调试阶段建议先关着**，语音误触发是真实存在的 |
+| 演示设备 | 内置 4 台假设备；不勾但音箱是演示模式时也会自动用假的 |
+| 高危设备关键字 | 门锁/摄像头/燃气/烟感**永远不该让语音直接操作**，命中即只读 |
+
 **语音播报**
 
 | 配置项 | 注意 |
@@ -158,6 +180,58 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 | 应答语 | 缓解模型响应期间的静默，留空不播 |
 | 播报应答语 | 关掉可省一次云端调用，但等待时完全没有反馈 |
 | 语音播报回答 | 关掉只记日志不出声，适合调试阶段先看回答对不对 |
+
+## 米家智能家居
+
+和音箱共用同一个小米账号（音箱走 `micoapi`，米家走 `xiaomiio`，token 存在同一个文件里），**不需要额外授权，也不需要网关或局域网直连**。
+
+### 给了 Agent 什么能力
+
+| 工具 | 作用 |
+|---|---|
+| `mi_home_devices` | 列出账号下所有设备（名称、型号），高危设备标注只读 |
+| `mi_home_capabilities` | 查某台设备能干什么：可读写属性、取值范围、可执行动作 |
+| `mi_home_get` | 读一个属性的当前值 |
+| `mi_home_set` | 写属性（开关类用 开/关，数值类给数字） |
+| `mi_home_action` | 执行动作（不是属性），例如 `toggle` |
+| `mi_home_scenes` / `mi_home_scene` | 列出 / 执行用户自定义场景 |
+
+设备能力按型号从 `miot-spec.org` 拉取，缓存在 `data/miot-cache/`。所以模型不需要背 `siid/piid` 数字，直接说「把客厅灯调暗一点」就行——它会先查能力、再换算成 `brightness=30`。
+
+### 自定义场景
+
+「米家设备」面板底部是场景编辑器，存到 `data/scenes.json`，保存即生效不用重启：
+
+```json
+{
+  "睡觉": {
+    "desc": "关灯、关插座、空调 26 度",
+    "steps": [
+      {"device": "客厅灯", "prop": "power", "value": "关"},
+      {"device": "书桌插座", "prop": "power", "value": "关"},
+      {"device": "主卧空调", "prop": "power", "value": "开"},
+      {"device": "主卧空调", "prop": "target-temperature", "value": 26}
+    ]
+  }
+}
+```
+
+步骤只有三种：写属性 `{device, prop, value}`、执行动作 `{device, action, args}`、等待 `{delay: 秒}`。保存前做结构校验；执行时单步失败不中断，最后一起汇报成功几步、失败几步。
+
+说完「小助手，执行睡觉」就全做完了。
+
+### 安全设计
+
+语音误开灯可以接受，语音误开门锁不行，所以：
+
+- **高危设备永远只读**：门锁、摄像头、燃气、烟感、报警器、保险箱、门铃，按型号或设备名子串匹配（`blocked_keywords` 可改），命中的设备写入和动作都被拒绝
+- **写入总开关**：`allow_write` 关掉后米家只能读，调试阶段建议先关着
+- **米家总开关**：`enabled` 关掉后模型根本拿不到这 6 个工具
+- 只读属性拒绝写入；类型对不上（比如对布尔属性说「调暗一点」）直接报错，不会瞎猜
+
+### 演示模式
+
+内置四台假设备（客厅灯 / 主卧空调 / 书桌插座 / 大门锁），不连真实米家也能把「语音 → 模型 → 工具 → 场景」整条链路跑通。
 
 ## 安全边界
 
@@ -189,7 +263,9 @@ xiaoai-console/
     ├── bridge.py    轮询 → 唤醒词 → Agent → TTS 的工作线程
     ├── llm.py       OpenAI 兼容客户端（urllib，无 SDK）
     ├── mi.py        miservice 适配 + 演示模式 + 验证码中转
-    ├── tools.py     白名单 shell / 文件工具
+    ├── tools.py     白名单 shell / 文件 / 米家工具
+    ├── miot.py      米家 MIoT 客户端（能力缓存、高危保护、演示设备）
+    ├── scenes.py    自定义场景引擎
     ├── store.py     配置、历史、日志持久化 + 路径可移植
     ├── health.py    环境体检（Python/依赖/端口/路径/凭据）
     ├── doctor.py    命令行体检入口
@@ -203,6 +279,9 @@ GET  /api/ping | /api/state | /api/history | /api/logs | /api/logs/stream | /api
 POST /api/config | /api/bridge/{start,stop,restart} | /api/chat | /api/tts
 POST /api/diag/{llm,mi} | /api/mi/otp | /api/mock/say | /api/history/clear
 
+GET  /api/miot/devices | /api/miot/spec?device=NAME | /api/scenes
+POST /api/miot/get | /api/miot/set | /api/scenes | /api/scenes/run
+
 GET  /api/portable/selfcheck | /api/portable/machine | /api/portable/export?secrets=0|1
 POST /api/portable/import | /api/portable/default-repo
 ```
@@ -213,7 +292,7 @@ POST /api/portable/import | /api/portable/default-repo
 ./run-tests.sh                       # 或 python -m unittest discover -s tests -t .
 ```
 
-44 个用例，覆盖：命令注入与路径越界、配置可移植与密钥脱敏、播报文本压缩、唤醒词、LLM 重试策略、HTTP 层跨站拦截与参数钳制。测试不依赖 `miservice`，CI 在 Ubuntu / macOS / Windows × Python 3.9 / 3.12 上跑。
+72 个用例，覆盖：命令注入与路径越界、配置可移植与密钥脱敏、播报文本压缩、唤醒词、LLM 重试策略、HTTP 层跨站拦截与参数钳制、米家值转换与高危设备保护、场景校验与部分失败处理。测试不依赖 `miservice`，CI 在 Ubuntu / macOS / Windows × Python 3.9 / 3.12 上跑。
 
 ## 已知限制
 

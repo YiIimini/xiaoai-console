@@ -141,6 +141,96 @@ def git_diff(cfg: Dict[str, Any]) -> str:
     return run_shell(cfg, "git diff --stat")
 
 
+MIOT_TOOLS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "mi_home_devices",
+            "description": "列出这个小米账号下的所有米家设备（名称、型号）。不知道有什么设备时先调它。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mi_home_capabilities",
+            "description": "查询某台米家设备能做什么：有哪些可读写的属性、取值、可执行的动作。改设备前必须先查。",
+            "parameters": {
+                "type": "object",
+                "properties": {"device": {"type": "string", "description": "设备名，例如 客厅灯"}},
+                "required": ["device"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mi_home_get",
+            "description": "读取米家设备某个属性的当前值。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device": {"type": "string"},
+                    "prop": {"type": "string", "description": "属性名，例如 power / brightness / target-temperature"},
+                },
+                "required": ["device", "prop"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mi_home_set",
+            "description": "设置米家设备属性。开关类用 开/关，数值类用数字。门锁/摄像头/燃气等高危设备会被拒绝。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device": {"type": "string"},
+                    "prop": {"type": "string"},
+                    "value": {"description": "目标值，字符串或数字"},
+                },
+                "required": ["device", "prop", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mi_home_action",
+            "description": "对米家设备执行一个动作（不是属性），例如 toggle。参数不明确时先查 capabilities。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device": {"type": "string"},
+                    "action": {"type": "string"},
+                    "args": {"type": "array", "items": {}, "description": "动作入参，通常留空"},
+                },
+                "required": ["device", "action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mi_home_scenes",
+            "description": "列出用户自定义的米家场景（例如 回家/睡觉/全关）。没有指定场景名时用它看有哪些。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mi_home_scene",
+            "description": "执行一个用户预定义的场景，一次性完成多台设备操作。",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "场景名，例如 睡觉"}},
+                "required": ["name"],
+            },
+        },
+    },
+]
+
 TOOL_SPECS: List[Dict[str, Any]] = [
     {
         "type": "function",
@@ -203,8 +293,44 @@ TOOL_SPECS: List[Dict[str, Any]] = [
 ]
 
 
+TOOL_SPECS = TOOL_SPECS + MIOT_TOOLS
+
+
+def _dispatch_miot(name: str, args: Dict[str, Any]) -> str:
+    from . import miot, scenes
+
+    try:
+        if name == "mi_home_devices":
+            return miot.list_devices_text()
+        if name == "mi_home_capabilities":
+            return miot.capabilities(args.get("device", ""))
+        if name == "mi_home_get":
+            return miot.read_prop(args.get("device", ""), args.get("prop", ""))
+        if name == "mi_home_set":
+            return miot.write_prop(args.get("device", ""), args.get("prop", ""), args.get("value"))
+        if name == "mi_home_action":
+            return miot.do_action(args.get("device", ""), args.get("action", ""), args.get("args") or [])
+        if name == "mi_home_scenes":
+            return scenes.summary_text()
+        if name == "mi_home_scene":
+            return scenes.run(args.get("name", ""))
+        return "未知米家工具: %s" % name
+    except Exception as e:  # noqa: BLE001
+        return "米家操作失败: %s" % e
+
+
+def _miot_enabled() -> bool:
+    from .store import load_config
+
+    return bool(load_config()["miot"].get("enabled", True))
+
+
 def dispatch(cfg: Dict[str, Any], name: str, args: Dict[str, Any]) -> str:
     try:
+        if name.startswith("mi_home_"):
+            if not _miot_enabled():
+                return "米家接入当前已关闭（到「米家设备」面板开启）"
+            return _dispatch_miot(name, args)
         if name == "run_shell":
             return run_shell(cfg, args.get("cmd", ""))
         if name == "read_file":
