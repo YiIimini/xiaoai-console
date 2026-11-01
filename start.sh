@@ -63,7 +63,7 @@ install_deps() {
     "https://pypi.mirrors.ustc.edu.cn/simple"; do
     say "  → $mirror"
     if "$VENV/bin/pip" install $args -i "$mirror" --trusted-host "$(echo "$mirror" | awk -F/ '{print $3}')" 2>/dev/null; then
-      ok "依赖安装成功（镜像：$mirror）"
+      ok "依赖安装成功（镜像：${mirror}）"
       return 0
     fi
   done
@@ -104,7 +104,8 @@ EOF
 }
 
 if ping_ok "$PORT"; then
-  say "工作台已在运行（端口 $PORT），直接打开"
+  [ -s data/port ] || echo "$PORT" > data/port
+  say "工作台已在运行（端口 ${PORT}），直接打开"
 else
   say "启动工作台，端口 $PORT 起（被占用会自动后移）"
   rm -f data/port
