@@ -1,0 +1,19 @@
+# 虚拟环境：绝对不能提交，里面写死了本机 Python 绝对路径
+.venv/
+
+# 运行时数据：含小米密码、API Key、登录凭据、日志、历史
+data/
+
+# 打包产物
+dist/
+*.zip
+
+__pycache__/
+*.pyc
+*.pyo
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
