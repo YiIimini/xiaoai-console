@@ -1,0 +1,4 @@
+# 路线 B（协议接管）唯一必需依赖：小米云服务客户端
+# LLM 调用用 Python 标准库 urllib 实现，无需 openai SDK
+# 上游 API 有变动风险，锁大版本；升级前先看 changelog
+miservice>=3.0,<4
