@@ -171,6 +171,31 @@
 
     renderMemory(st.memory);
 
+    // 桥接没跑时 speaker 为空，退回配置里的 did/dids，别显示成 0 台
+    let devs = b.devices || [];
+    if (!devs.length) {
+      const mi = ((st.config || {}).mi) || {};
+      const ids = (mi.dids && mi.dids.length) ? mi.dids : (mi.did ? [mi.did] : []);
+      devs = ids.map(did => ({ did, name: did, last: false }));
+    }
+    const ovd = $("#ov-devices");
+    if (ovd) {
+      ovd.textContent = devs.length;
+      $("#ov-device-list").textContent = devs.length
+        ? devs.map(d => (d.last ? "▶ " : "") + d.name).join("、")
+        : "未指定";
+    }
+    const sel = $("#mock-device");
+    if (sel) {
+      const keep = sel.value;
+      const opts = devs.map(d => `<option value="${esc(d.did)}">${esc(d.name)}</option>`).join("");
+      if (sel.dataset.sig !== opts) {
+        sel.innerHTML = opts || '<option value="">默认音箱</option>';
+        sel.dataset.sig = opts;
+        if (keep && Array.from(sel.options).some(o => o.value === keep)) sel.value = keep;
+      }
+    }
+
     // 播报列表
     const sp = b.spoken || [];
     $("#spoken-list").innerHTML = sp.length
@@ -301,27 +326,43 @@
   $("#btn-mock").addEventListener("click", async () => {
     const text = $("#mock-input").value.trim();
     if (!text) return toast("填一句模拟语音", true);
-    const r = await api("/api/mock/say", { text });
-    toast(r.ok ? "已注入，等待桥接取走" : (r.error || "失败"), !r.ok);
+    const did = $("#mock-device") ? $("#mock-device").value : "";
+    const r = await api("/api/mock/say", { text, did });
+    toast(r.ok ? `已注入给${r.device || "音箱"}，等待取走` : (r.error || "失败"), !r.ok);
   });
 
   /* ------------------------------------------------ 设备 / 诊断 */
+  let MI_DIDS = [];      // 勾选接管的音箱，保存时写进 mi.dids
+
   function renderDevices(list, box) {
     const tbl = $("#dev-table");
     const tb = $("tbody", tbl);
-    tb.innerHTML = (list || []).map(d =>
-      `<tr><td>${esc(d.name || "—")}</td><td>${esc(d.hardware || "—")}</td><td><code>${esc(d.did)}</code></td></tr>`
-    ).join("");
+    MI_DIDS = (((STATE || {}).config || {}).mi || {}).dids || [];
+    tb.innerHTML = (list || []).map(d => {
+      const on = MI_DIDS.includes(d.did) ? "checked" : "";
+      return `<tr><td><input type="checkbox" class="pick-did" data-did="${esc(d.did)}" ${on}></td>
+      <td>${esc(d.name || "—")}</td><td>${esc(d.hardware || "—")}</td><td><code>${esc(d.did)}</code></td></tr>`;
+    }).join("");
     tbl.hidden = !(list && list.length);
     const dn = $("#dev-note");
     if (dn) dn.hidden = !(list && list.length);
-    if (list && list.length) box.textContent = "发现 " + list.length + " 台设备。";
+    if (list && list.length) box.textContent = `发现 ${list.length} 台设备。`;
+    $$("#dev-table .pick-did").forEach(cb => {
+      cb.addEventListener("change", () => {
+        const did = cb.dataset.did;
+        if (cb.checked) {
+          if (!MI_DIDS.includes(did)) MI_DIDS.push(did);
+        } else {
+          MI_DIDS = MI_DIDS.filter(x => x !== did);
+        }
+      });
+    });
     $$("#dev-table tbody tr").forEach(tr => {
-      tr.style.cursor = "pointer";
-      tr.addEventListener("click", () => {
+      tr.addEventListener("click", (e) => {
+        if (e.target.tagName === "INPUT") return;
         const did = tr.querySelector("code").textContent;
         $('#mi input[name="did"]').value = did;
-        toast("已填入 DID");
+        toast("已填入单个 DID");
       });
     });
   }
@@ -367,7 +408,16 @@
       : (r.error || "失败");
   });
 
-  $("#btn-save-mi").addEventListener("click", () => saveSection("mi").then(() => refresh()));
+  $("#btn-save-mi").addEventListener("click", async () => {
+    const patch = collectForm("mi");
+    patch.dids = MI_DIDS;
+    const r = await api("/api/config", { mi: patch });
+    if (!r.ok) return toast(r.error || "保存失败", true);
+    DIRTY.delete("mi");
+    fillForm("mi", r.config.mi);
+    toast(MI_DIDS.length > 1 ? `已保存，接管 ${MI_DIDS.length} 台音箱` : "配置已保存");
+    refresh();
+  });
   $("#btn-save-llm").addEventListener("click", () => saveSection("llm"));
   $("#btn-save-agent").addEventListener("click", () => saveSection("agent"));
   $("#btn-save-voice").addEventListener("click", () => saveSection("voice"));
@@ -422,6 +472,22 @@
 
   const histSearch = $("#hist-search");
   if (histSearch) histSearch.addEventListener("input", renderHistory);
+  function downloadAs(url, fallbackName) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fallbackName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast("已开始下载");
+  }
+  $("#btn-hist-export-md").addEventListener("click", () => {
+    downloadAs("/api/history/export?format=md&limit=500", "xiaoai-history.md");
+  });
+  $("#btn-hist-export-json").addEventListener("click", () => {
+    downloadAs("/api/history/export?format=json&limit=500", "xiaoai-history.json");
+  });
+
   $("#btn-hist-refresh").addEventListener("click", loadHistory);
   $("#btn-hist-clear").addEventListener("click", async () => {
     const r = await api("/api/history/clear", {});

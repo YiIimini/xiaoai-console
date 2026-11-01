@@ -64,6 +64,11 @@
             <div class="card-d" id="ov-polls">轮询 0 次</div>
           </div>
           <div class="card">
+            <div class="card-k">管理音箱</div>
+            <div class="card-v" id="ov-devices">0</div>
+            <div class="card-d" id="ov-device-list">—</div>
+          </div>
+          <div class="card">
             <div class="card-k">错误计数</div>
             <div class="card-v" id="ov-errors">0</div>
             <div class="card-d" id="ov-lasterr">—</div>
@@ -90,6 +95,7 @@
           <div class="box">
             <h2>模拟发问（不接真机也能验证链路）</h2>
             <div class="row">
+              <select id="mock-device" style="width:150px" title="选哪台音箱收到这句话"></select>
               <input id="mock-input" type="text" placeholder="模拟小爱收到的语音文本">
               <button class="btn" id="btn-mock">注入</button>
             </div>
@@ -172,10 +178,10 @@
           <div class="result" id="mi-result">尚未测试。</div>
 
           <table class="tbl" id="dev-table" hidden>
-            <thead><tr><th>设备名</th><th>型号</th><th>DID</th></tr></thead>
+            <thead><tr><th style="width:60px">接管</th><th>设备名</th><th>型号</th><th>DID</th></tr></thead>
             <tbody></tbody>
           </table>
-          <p class="note" id="dev-note" hidden>点击任意一行即可把该设备的 DID 填入上方表单。</p>
+          <p class="note" id="dev-note" hidden>勾选「接管」可以同时管理多台音箱：谁被唤醒就回谁。不勾则用上面填的单个 DID。</p>
         </div>
       </section>
 
@@ -398,6 +404,8 @@
             <h2>会话记录</h2>
             <div class="row">
               <input id="hist-search" type="text" placeholder="搜索提问或回答…" style="width:190px">
+              <button class="btn" id="btn-hist-export-md" title="导出 Markdown：含工具调用参数与结果，适合复盘">导出 Markdown</button>
+              <button class="btn" id="btn-hist-export-json" title="导出原始 JSON，适合二次处理">导出 JSON</button>
               <button class="btn" id="btn-hist-refresh">刷新</button>
               <button class="btn danger" id="btn-hist-clear" title="清空本机记录文件，不影响音箱和模型配置">清空</button>
             </div>

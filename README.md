@@ -48,6 +48,10 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 |---|---|
 | ![米家](screenshots/ui-miot.png) | ![记忆](screenshots/ui-memory.png) |
 
+| 多音箱接管 |
+|---|
+| ![多音箱](screenshots/ui-multi.png) |
+
 ## 三个高频问题
 
 **Q1：音箱要和跑工作台的机器在同一个局域网吗？**
@@ -144,6 +148,7 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 | 小米账号 | 建议单独开小号——同一账号在别处登录会顶掉手机上的小爱 App |
 | 密码 | 明文只存本机 `data/config.json`（0600）；输入框留空＝保持原密码不变 |
 | 设备 DID | 点「发现设备」后点表格一行自动填入；留空则取账号下第一台 |
+| 接管（多选） | 勾多台即多音箱：谁被唤醒回谁；**N 台 = N 次轮询**，超过 5 台调大间隔 |
 | 硬件型号 | 只影响能力判断，纯文本播报填错一般也能用 |
 | 轮询间隔 | **别低于 1 秒**，小米云端有频率限制，太频繁会被限流甚至短暂封号 |
 | 演示模式 | 勾选后完全不访问小米云，用「模拟发问」验证链路；接管真机前记得取消 |
@@ -203,6 +208,31 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 | 语音播报回答 | 关掉只记日志不出声，适合调试阶段先看回答对不对 |
 | 逐句流式播报 | **代码块整体跳过**不会被念；关掉则等全部生成完再播摘要 |
 | 允许语音打断 | 关掉则上一轮结束前的输入被忽略，**不会排队重放** |
+
+## 多音箱
+
+一个工作台可以同时接管多台音箱：**谁被唤醒就回谁**。
+
+配置方式：「音箱接入」点「发现设备」，在表格里勾选要接管的几台，保存即可（写进 `mi.dids`）。不勾则退回单个 `mi.did`，再退回账号下第一台。
+
+实现要点：
+
+- 轮询按 DID 逐个取对话，每条带上 `device` 标记，回播定向到发问的那台
+- 打断也是定向的：停的是正在说话的那台，不影响别的
+- 总览卡片和「模拟发问」的下拉都会跟着当前接管的设备走
+
+代价是 **N 台音箱 = N 次云端轮询**。两三台没问题，超过 5 台建议把轮询间隔调到 2 秒以上，避开限流。
+
+## 会话导出
+
+「会话记录」面板右上角两个按钮：
+
+| 格式 | 内容 | 用途 |
+|---|---|---|
+| **Markdown** | 每轮的时间、耗时、问答、工具调用参数与结果、是否播报 | 复盘「它当时到底干了什么」，贴进 issue 或笔记 |
+| **JSON** | 原始 turn 数组 | 二次处理、统计、喂给别的工具 |
+
+Markdown 里工具结果是折叠的（`<details>`），长日志不会把文档撑爆。
 
 ## 记忆与流式
 
@@ -328,6 +358,7 @@ xiaoai-console/
     ├── miot.py      米家 MIoT 客户端（能力缓存、高危保护、演示设备）
     ├── scenes.py    自定义场景引擎
     ├── memory.py    对话记忆（短期上下文 + 长期落盘）
+    ├── export.py    会话导出（Markdown / JSON）
     ├── store.py     配置、历史、日志持久化 + 路径可移植
     ├── health.py    环境体检（Python/依赖/端口/路径/凭据）
     ├── doctor.py    命令行体检入口
@@ -341,7 +372,7 @@ GET  /api/ping | /api/state | /api/history | /api/logs | /api/logs/stream | /api
 POST /api/config | /api/bridge/{start,stop,restart} | /api/chat | /api/tts
 POST /api/diag/{llm,mi} | /api/mi/otp | /api/mock/say | /api/history/clear
 
-GET  /api/memory | /api/miot/devices | /api/miot/spec?device=NAME | /api/scenes
+GET  /api/history/export?format=md|json | /api/memory | /api/miot/devices | /api/miot/spec?device=NAME | /api/scenes
 POST /api/memory/clear | /api/chat/stream | /api/miot/get | /api/miot/set
 POST /api/scenes | /api/scenes/run
 
@@ -355,7 +386,7 @@ POST /api/portable/import | /api/portable/default-repo
 ./run-tests.sh                       # 或 python -m unittest discover -s tests -t .
 ```
 
-105 个用例，覆盖：命令注入与路径越界、配置可移植与密钥脱敏、播报文本压缩、唤醒词、LLM 重试策略、HTTP 层跨站拦截与参数钳制、米家值转换与高危设备保护、场景校验与部分失败处理、记忆上下文拼装与预算、流式 SSE 解析与降级、句子切分与代码块跳过、打断世代号。测试不依赖 `miservice`，CI 在 Ubuntu / macOS / Windows × Python 3.9 / 3.12 上跑。
+118 个用例，覆盖：命令注入与路径越界、配置可移植与密钥脱敏、播报文本压缩、唤醒词、LLM 重试策略、HTTP 层跨站拦截与参数钳制、米家值转换与高危设备保护、场景校验与部分失败处理、记忆上下文拼装与预算、流式 SSE 解析与降级、句子切分与代码块跳过、打断世代号、多音箱路由与请求去重、会话导出结构。测试不依赖 `miservice`，CI 在 Ubuntu / macOS / Windows × Python 3.9 / 3.12 上跑。
 
 ## 已知限制
 
@@ -364,3 +395,4 @@ POST /api/portable/import | /api/portable/default-repo
 - 小米接口随时可能变，锁死 `miservice` 版本，升级前先看 changelog
 - 真机轮询有频率限制，间隔不要低于 1 秒
 - 记忆只存问答摘要，不回放工具调用轨迹；想保住某条结论就让它 `memory_remember`
+- 多音箱是逐个轮询，不是事件推送；N 台就是 N 倍请求量

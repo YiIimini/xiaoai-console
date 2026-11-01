@@ -36,6 +36,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "username": "",
         "password": "",
         "did": "",
+        "dids": [],
         "hardware": "LX06",
         "token_path": "data/.mi.token",
         "poll_interval": 1.0,

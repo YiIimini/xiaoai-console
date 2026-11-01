@@ -115,6 +115,7 @@ class Bridge:
         self.speaker = None
         self._busy = False
         self._gen = 0
+        self._last_device = ""
         self.stats: Dict[str, Any] = {
             "turns": 0,
             "polls": 0,
@@ -132,10 +133,20 @@ class Bridge:
         return self.state in ("starting", "running")
 
     def status(self) -> Dict[str, Any]:
+        device_list: List[Dict[str, Any]] = []
+        spk = self.speaker
+        try:
+            if spk is not None:
+                for did in spk.resolve_dids():
+                    device_list.append({"did": did, "name": spk.name_of(did),
+                                        "last": did == self._last_device})
+        except Exception:
+            pass
         return {
             "state": self.state,
             "running": self.running,
             "busy": self._busy,
+            "devices": device_list,
             "uptime": int(time.time() - self.stats["started_at"]) if self.stats["started_at"] else 0,
             "stats": {k: v for k, v in self.stats.items() if k != "spoken"},
             "spoken": self.stats["spoken"][-10:],
@@ -281,14 +292,17 @@ class Bridge:
                     # 上一轮还没结束时：能打断就打断，否则明确忽略，绝不排队重放
                     if self._busy:
                         if cfg["voice"].get("barge_in", True):
-                            await self._barge_in()
+                            await self._barge_in(item.get("device") or "")
                         else:
                             LOG.info("上一轮仍在处理，忽略: %s" % query[:30])
                             continue
 
+                    device = item.get("device") or ""
+                    if device:
+                        self._last_device = device
                     self._gen += 1
                     self._busy = True
-                    asyncio.ensure_future(self._handle_turn(cfg, query, self._gen))
+                    asyncio.ensure_future(self._handle_turn(cfg, query, self._gen, device))
             except Exception as e:  # noqa: BLE001
                 self.stats["errors"] += 1
                 self.stats["last_error"] = "%s: %s" % (type(e).__name__, e)
@@ -297,25 +311,29 @@ class Bridge:
                 continue
             await asyncio.sleep(interval)
 
-    async def _barge_in(self) -> None:
+    async def _barge_in(self, device: str = "") -> None:
         """新的一句话来了：停掉正在播报的内容，并作废当前这轮。"""
         self._gen += 1
         LOG.warn("检测到新的语音输入，打断当前回复")
         try:
             stop = getattr(self.speaker, "stop", None)
             if stop:
-                await stop()
+                try:
+                    await stop(device)
+                except TypeError:
+                    await stop()
         except Exception as e:  # noqa: BLE001
             LOG.warn("停止播报失败: %s" % e)
 
-    async def _handle_turn(self, cfg: Dict[str, Any], query: str, gen: int) -> None:
+    async def _handle_turn(self, cfg: Dict[str, Any], query: str, gen: int,
+                           device: str = "") -> None:
         """一轮完整处理。用 generation 作废旧轮，避免打断后旧结果又播出来。"""
         loop = asyncio.get_running_loop()
         vcfg = cfg["voice"]
         try:
             LOG.info("🎤 收到: %s" % query)
             if vcfg.get("ack_enabled") and (vcfg.get("ack") or "").strip():
-                await self._say(vcfg, vcfg["ack"], gen)
+                await self._say(vcfg, vcfg["ack"], gen, device)
 
             spoken_stream = False
             on_delta = None
@@ -332,7 +350,7 @@ class Bridge:
                     for sent in _sp.feed(text):
                         _q.put(sent)
 
-                drain_task = asyncio.ensure_future(self._drain_sentences(sent_q, vcfg, gen))
+                drain_task = asyncio.ensure_future(self._drain_sentences(sent_q, vcfg, gen, device))
 
             turn = await loop.run_in_executor(None, self.run_agent, query, "voice", False, on_delta)
 
@@ -356,7 +374,7 @@ class Bridge:
                 turn["spoken"] = True
                 HIST.flush()
             elif vcfg.get("speak", True):
-                if await self._say(vcfg, turn.get("answer", ""), gen):
+                if await self._say(vcfg, turn.get("answer", ""), gen, device):
                     turn["spoken"] = True
                     HIST.flush()
         except Exception as e:  # noqa: BLE001
@@ -368,7 +386,7 @@ class Bridge:
                 self._busy = False
 
     async def _drain_sentences(self, q: "queue.Queue[Optional[str]]", voice_cfg: Dict[str, Any],
-                               gen: int = 0) -> bool:
+                               gen: int = 0, device: str = "") -> bool:
         """边生成边播报：队列里有句子就送音箱，收到 None 结束。被打断即停。"""
         spoke = False
         while True:
@@ -383,11 +401,12 @@ class Bridge:
                 break
             if gen and gen != self._gen:
                 return spoke
-            if await self._say(voice_cfg, sent):
+            if await self._say(voice_cfg, sent, 0, device):
                 spoke = True
         return spoke
 
-    async def _say(self, voice_cfg: Dict[str, Any], text: str, gen: int = 0) -> bool:
+    async def _say(self, voice_cfg: Dict[str, Any], text: str, gen: int = 0,
+                   device: str = "") -> bool:
         if not (text or "").strip():
             return False
         if gen and gen != self._gen:
@@ -396,8 +415,18 @@ class Bridge:
         if not speech.strip():
             return False
         try:
-            await self.speaker.speak(speech)
-            self.stats["spoken"].append({"ts": time.time(), "text": speech})
+            try:
+                await self.speaker.speak(speech, device)
+            except TypeError:
+                await self.speaker.speak(speech)
+            who = ""
+            name_of = getattr(self.speaker, "name_of", None)
+            if name_of and device:
+                try:
+                    who = name_of(device)
+                except Exception:
+                    who = ""
+            self.stats["spoken"].append({"ts": time.time(), "text": speech, "device": who})
             self.stats["spoken"] = self.stats["spoken"][-20:]
             return True
         except Exception as e:  # noqa: BLE001

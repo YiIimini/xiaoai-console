@@ -21,7 +21,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
-from . import bridge, health, llm, memory, miot, scenes, store
+from . import bridge, export, health, llm, memory, miot, scenes, store
 from .console import safe_print
 from .mi import OTP, MiError, miservice_available
 
@@ -142,6 +142,27 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/portable/export":
             secrets = qs.get("secrets", ["0"])[0] in ("1", "true", "yes")
             return self._json({"ok": True, "bundle": store.export_config(secrets)})
+        if path == "/api/history/export":
+            fmt = (qs.get("format", ["md"])[0] or "md").lower()
+            limit = int(qs.get("limit", ["500"])[0])
+            turns = HIST.list(limit)
+            mem_n = int(memory.MEM.stats().get("stored") or 0)
+            if fmt == "json":
+                body = export.to_json(turns, mem_n).encode("utf-8")
+                name = "xiaoai-history-%s.json" % time.strftime("%Y%m%d-%H%M")
+                ctype = "application/json; charset=utf-8"
+            else:
+                body = export.to_markdown(turns, mem_n).encode("utf-8")
+                name = "xiaoai-history-%s.md" % time.strftime("%Y%m%d-%H%M")
+                ctype = "text/markdown; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % name)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            LOG.ok("已导出会话记录 %d 轮（%s）" % (len(turns), fmt))
+            return self.wfile.write(body)
         if path == "/api/memory":
             return self._json({"ok": True, **memory.MEM.stats()})
         if path == "/api/miot/devices":
@@ -353,9 +374,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("内容为空")
         if BR.speaker is None or not hasattr(BR.speaker, "inject"):
             return self._err("当前不是演示模式，且桥接未启动")
-        BR.speaker.inject(text)
-        LOG.info("🧪 模拟发问: %s" % text)
-        return self._json({"ok": True})
+        did = str(body.get("did") or "").strip()
+        BR.speaker.inject(text, did)
+        who = BR.speaker.name_of(did) if did else "默认音箱"
+        LOG.info("🧪 模拟发问[%s]: %s" % (who, text))
+        return self._json({"ok": True, "device": who})
 
     def _devices(self) -> None:
         cfg = store.load_config()

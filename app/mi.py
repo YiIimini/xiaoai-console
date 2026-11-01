@@ -111,19 +111,41 @@ class RealSpeaker:
             await self.connect()
         return await self.mina.device_list() or []
 
-    def resolve_did(self) -> str:
+    def resolve_dids(self) -> List[str]:
+        """接管的音箱列表：优先 mi.dids，其次 mi.did，最后账号下第一台。"""
+        out = [str(d).strip() for d in (self.cfg.get("dids") or []) if str(d).strip()]
+        if out:
+            return out
         did = (self.cfg.get("did") or "").strip()
         if did:
-            return did
+            return [did]
         if self.dids:
-            return str(self.dids[0].get("deviceID") or "")
+            return [str(self.dids[0].get("deviceID") or "")]
         raise MiError("未指定设备 did，且未发现任何小爱音箱")
+
+    def resolve_did(self) -> str:
+        return self.resolve_dids()[0]
+
+    def name_of(self, did: str) -> str:
+        for d in self.dids or []:
+            if str(d.get("deviceID") or "") == did:
+                return d.get("name") or did
+        return did
 
     async def poll(self) -> List[Dict[str, Any]]:
         if self.mina is None:
             await self.connect()
-        did = self.resolve_did()
-        raw = await self.mina.get_latest_ask(did) or []
+        out: List[Dict[str, Any]] = []
+        for did in self.resolve_dids():
+            try:
+                raw = await self.mina.get_latest_ask(did) or []
+            except Exception as e:  # noqa: BLE001
+                self.log.warn("轮询音箱 %s 失败: %s" % (self.name_of(did), e))
+                continue
+            out.extend(self._parse(raw, did))
+        return out
+
+    def _parse(self, raw: List[Dict[str, Any]], did: str) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for item in raw:
             answers = (item.get("response") or {}).get("answer") or []
@@ -138,22 +160,29 @@ class RealSpeaker:
                 "request_id": item.get("request_id") or "",
                 "ts": (item.get("timestamp_ms") or 0) / 1000.0,
                 "question": q,
+                "device": did,
             })
         return out
 
-    async def speak(self, text: str) -> bool:
+    async def speak(self, text: str, did: str = "") -> bool:
         if self.mina is None:
             await self.connect()
-        return await self.mina.text_to_speech(self.resolve_did(), text)
+        return await self.mina.text_to_speech(did or self.resolve_did(), text)
 
-    async def stop(self) -> bool:
+    async def stop(self, did: str = "") -> bool:
         """打断当前播报。"""
         if self.mina is None:
             await self.connect()
-        return await self.mina.player_stop(self.resolve_did())
+        return await self.mina.player_stop(did or self.resolve_did())
 
 
 # ---------------------------------------------------------------- 演示模式
+MOCK_DEVICES = [
+    {"deviceID": "mock-0001", "hardware": "MOCK", "name": "演示音箱·客厅"},
+    {"deviceID": "mock-0002", "hardware": "MOCK", "name": "演示音箱·卧室"},
+]
+
+
 class MockSpeaker:
     """不碰真机，用来验证「轮询 → 大模型 → 工具 → 播报」整条链路。"""
 
@@ -162,6 +191,7 @@ class MockSpeaker:
     def __init__(self, mi_cfg: Dict[str, Any], log) -> None:
         self.cfg = mi_cfg
         self.log = log
+        self.dids = list(MOCK_DEVICES)
         self._q: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self.spoken: List[Dict[str, Any]] = []
 
@@ -169,16 +199,32 @@ class MockSpeaker:
         self.log.ok("演示模式已连接（不会访问小米云）")
 
     async def devices(self) -> List[Dict[str, Any]]:
-        return [{"deviceID": "mock-0001", "hardware": "MOCK", "name": "演示音箱"}]
+        return [dict(d) for d in MOCK_DEVICES]
+
+    def resolve_dids(self) -> List[str]:
+        out = [str(d).strip() for d in (self.cfg.get("dids") or []) if str(d).strip()]
+        if out:
+            return out
+        return [(self.cfg.get("did") or "mock-0001").strip() or "mock-0001"]
 
     def resolve_did(self) -> str:
-        return (self.cfg.get("did") or "mock-0001").strip() or "mock-0001"
+        return self.resolve_dids()[0]
 
-    def inject(self, text: str) -> None:
+    def name_of(self, did: str) -> str:
+        for d in MOCK_DEVICES:
+            if d["deviceID"] == did:
+                return d["name"]
+        return did
+
+    def inject(self, text: str, did: str = "") -> None:
+        # 用纳秒 + 序号：同一毫秒内对两台音箱说同一句话时，
+        # 原来按毫秒+长度生成的 id 会撞车，导致后一条被去重丢掉
+        self._seq = getattr(self, "_seq", 0) + 1
         self._q.put({
-            "request_id": "mock-%d" % int(time.time() * 1000),
+            "request_id": "mock-%d-%d" % (time.time_ns(), self._seq),
             "ts": time.time(),
             "question": text,
+            "device": did or self.resolve_did(),
         })
 
     async def poll(self) -> List[Dict[str, Any]]:
@@ -190,15 +236,17 @@ class MockSpeaker:
                 break
         return out
 
-    async def speak(self, text: str) -> bool:
-        self.spoken.append({"ts": time.time(), "text": text})
+    async def speak(self, text: str, did: str = "") -> bool:
+        who = self.name_of(did or self.resolve_did())
+        self.spoken.append({"ts": time.time(), "text": text, "device": who})
         self.spoken = self.spoken[-50:]
-        self.log.info("🔊 播报: %s" % text)
+        self.log.info("🔊 [%s] 播报: %s" % (who, text))
         return True
 
-    async def stop(self) -> bool:
-        self.spoken.append({"ts": time.time(), "text": "（打断）"})
-        self.log.info("🔇 截断当前播报")
+    async def stop(self, did: str = "") -> bool:
+        who = self.name_of(did or self.resolve_did())
+        self.spoken.append({"ts": time.time(), "text": "（打断）", "device": who})
+        self.log.info("🔇 [%s] 截断当前播报" % who)
         return True
 
 

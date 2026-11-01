@@ -43,7 +43,7 @@ class GenerationTest(unittest.TestCase):
     def test_stop_is_called(self):
         called = {}
 
-        async def fake_stop():
+        async def fake_stop(did=""):
             called["yes"] = True
             return True
 
@@ -60,7 +60,7 @@ class GenerationTest(unittest.TestCase):
         # 拿到第一句后立刻模拟被打断
         orig = self.br._say
 
-        async def say_and_bump(cfg, text, gen=0):
+        async def say_and_bump(cfg, text, gen=0, device=""):
             r = await orig(cfg, text, gen)
             self.br._gen += 1
             q.put("第二句。")
@@ -68,7 +68,7 @@ class GenerationTest(unittest.TestCase):
             return r
 
         self.br._say = say_and_bump
-        spoke = bridge.asyncio.run(self.br._drain_sentences(q, {"tts_max_chars": 160}, gen=2))
+        spoke = bridge.asyncio.run(self.br._drain_sentences(q, {"tts_max_chars": 160}, gen=2, device="mock-0001"))
         self.assertTrue(spoke)
         # 第二句属于旧轮，被打断后不应播
         self.assertEqual([s["text"] for s in self.br.speaker.spoken], ["第一句。"])
