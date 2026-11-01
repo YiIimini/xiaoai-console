@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
 from . import bridge, health, llm, store
+from .console import safe_print
 from .mi import OTP, MiError, miservice_available
 
 ROOT = store.ROOT
@@ -409,7 +410,7 @@ def serve(host: str, port: int) -> None:
             f.write(str(port))
     except Exception:
         pass
-    print("工作台已启动: http://%s:%d" % (host, port), flush=True)
+    safe_print("工作台已启动: http://%s:%d" % (host, port), flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -9,6 +9,10 @@ import time
 from collections import deque
 from typing import Any, Deque, Dict, List
 
+from .console import safe_print, setup as _setup_console
+
+_setup_console()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -241,7 +245,7 @@ class LogBus:
                     f.writelines(keep)
         except Exception:
             pass
-        print(line, flush=True)
+        safe_print(line, flush=True)
         for q in subs:
             try:
                 q.put_nowait(rec)
