@@ -16,10 +16,14 @@ if ! git remote get-url origin >/dev/null 2>&1; then
 fi
 
 say "检查 GitHub 连通性…"
-if ! ssh -o BatchMode=yes -o ConnectTimeout=8 -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
-  err "SSH 认证失败。先确认 ~/.ssh/id_ed25519 已加到 GitHub。"
-  exit 1
-fi
+# 注意：ssh -T 对 GitHub 恒定返回非 0，配合 pipefail 会误判，所以先抓输出再判断
+AUTH_OUT="$(ssh -o BatchMode=yes -o ConnectTimeout=8 -T git@github.com 2>&1 || true)"
+case "$AUTH_OUT" in
+  *"successfully authenticated"*) say "SSH 认证通过：${AUTH_OUT%%!*}" ;;
+  *) err "SSH 认证失败。先确认 ~/.ssh/id_ed25519.pub 已加到 GitHub → Settings → SSH keys。"
+     err "当前输出：$AUTH_OUT"
+     exit 1 ;;
+esac
 
 say "推送 main → $REMOTE"
 if git push -u origin main; then
