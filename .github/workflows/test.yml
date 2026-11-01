@@ -11,7 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # ubuntu-latest(24.04) 的 setup-python 对 3.9 不稳定，2.x 用 22.04
+        os: [ubuntu-22.04, macos-latest, windows-latest]
         python: ["3.9", "3.12"]
     runs-on: ${{ matrix.os }}
     steps:

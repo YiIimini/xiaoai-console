@@ -16,7 +16,8 @@ class SandboxTest(unittest.TestCase):
             f.write("hello")
         self.cfg = {
             "repo": self.repo,
-            "allowed_cmds": "ls,cat,git,python3,rm",
+            # 用跨平台命令：git 在所有 CI runner 上都有
+            "allowed_cmds": "git,ls,cat,tail,python3,python,rm",
             "shell_timeout": 10,
             "max_output": 2000,
             "allow_write": True,
@@ -26,16 +27,17 @@ class SandboxTest(unittest.TestCase):
         return tools.dispatch(self.cfg, "run_shell", {"cmd": cmd})
 
     def test_normal_command_ok(self):
-        self.assertIn("exit=0", self.run_cmd("ls"))
+        """用 git 而不是 ls：Windows runner 上没有 ls。"""
+        self.assertIn("exit=0", self.run_cmd("git --version"))
 
     def test_newline_injection_blocked(self):
         """P0：换行曾被用来绕过白名单再执行一条命令。"""
-        self.assertIn("拒绝", self.run_cmd("ls\nid -un"))
-        self.assertIn("拒绝", self.run_cmd("ls\rwhoami"))
-        self.assertIn("拒绝", self.run_cmd("ls\n\nrm -rf /"))
+        self.assertIn("拒绝", self.run_cmd("git --version\nid -un"))
+        self.assertIn("拒绝", self.run_cmd("git --version\rwhoami"))
+        self.assertIn("拒绝", self.run_cmd("git --version\n\nrm -rf /"))
 
     def test_metachars_blocked(self):
-        for c in ("ls; id", "ls && id", "ls | sh", "ls > out", "ls `id`", "ls $(id)"):
+        for c in ("git; id", "git && id", "git | sh", "git > out", "git `id`", "git $(id)"):
             with self.subTest(cmd=c):
                 self.assertIn("拒绝", self.run_cmd(c))
 
@@ -46,7 +48,7 @@ class SandboxTest(unittest.TestCase):
         self.assertIn("危险命令", self.run_cmd("rm -r build"))
 
     def test_not_in_whitelist(self):
-        self.assertIn("不在白名单", self.run_cmd("tail a.txt"))
+        self.assertIn("不在白名单", self.run_cmd("wc -l a.txt"))
 
     def test_network_tools_always_blocked(self):
         """联网类命令永远不放行，避免被用来外带数据。"""
@@ -55,7 +57,9 @@ class SandboxTest(unittest.TestCase):
                 self.assertIn("危险命令", self.run_cmd(c))
 
     def test_arbitrary_code_head_is_flagged(self):
-        out = self.run_cmd("python3 -c 'print(1)'")
+        """解释器类命令可执行任意代码，必须给出显式提示（跨平台：谁在就用谁）。"""
+        py = "python" if os.name == "nt" else "python3"
+        out = self.run_cmd('%s -c "print(1)"' % py)
         self.assertIn("任意代码", out)
 
     def test_path_traversal_blocked(self):
@@ -75,8 +79,8 @@ class SandboxTest(unittest.TestCase):
             self.assertEqual(f.read(), "hi")
 
     def test_missing_repo_reports_clearly(self):
-        self.cfg["repo"] = "/definitely/not/here"
-        self.assertIn("不存在", self.run_cmd("ls"))
+        self.cfg["repo"] = os.path.join(tempfile.gettempdir(), "no-such-repo-xyz")
+        self.assertIn("不存在", self.run_cmd("git --version"))
 
 
 if __name__ == "__main__":
