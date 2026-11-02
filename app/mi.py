@@ -67,6 +67,67 @@ def miservice_available() -> bool:
         return False
 
 
+
+
+# ---------------------------------------------------------------- 登录与风控
+#: 小米风控拦截后，本地先冷却，避免用户狂点把情况弄更糟
+_COOLDOWN: Dict[str, Any] = {"until": 0.0, "reason": ""}
+
+RISK_MARKERS = (
+    ("用户行为被限制", "小米风控拦截：短时间内登录或验证码请求过多。"),
+    ("20024", "小米风控拦截：短时间内登录或验证码请求过多。"),
+    ("Failed to send OTP", "小米拒绝下发验证码——通常是登录太频繁触发了风控。"),
+    ("client withdraw", "小米作废了当前会话（client withdraw）——通常紧跟风控之后。"),
+    ('"code":-127', "小米作废了当前会话（client withdraw）——通常紧跟风控之后。"),
+)
+
+
+def in_cooldown() -> str:
+    """冷却期内返回原因，否则空串。"""
+    if time.time() < _COOLDOWN["until"]:
+        left = int(_COOLDOWN["until"] - time.time())
+        return "小米风控冷却中（还需 %d 分 %d 秒）：%s" % (left // 60, left % 60, _COOLDOWN["reason"])
+    return ""
+
+
+def set_cooldown(minutes: int, reason: str) -> None:
+    _COOLDOWN["until"] = time.time() + minutes * 60
+    _COOLDOWN["reason"] = reason
+
+
+def friendly_mi_error(exc: Exception) -> "MiError":
+    """把小米那串 JSON 翻成能照做的话，并识别风控。"""
+    text = str(exc)
+    for marker, hint in RISK_MARKERS:
+        if marker in text:
+            set_cooldown(10, hint)
+            return MiError(
+                hint + "\n"
+                "已经停止重试，10 分钟内不再登录，请按这个顺序处理：\n"
+                "1) 什么都别点，等 30–60 分钟（时间窗由小米控制，重试只会延长）\n"
+                "2) 手机上的米家 App 正常登录一次，确认账号没被临时限制\n"
+                "3) 回来点一次「测试登录」，通过后 token 会缓存在 data/.mi.token，之后不再重复登录\n\n"
+                "原始错误：" + text[:200]
+            )
+    return MiError(text)
+
+
+async def ensure_login(account, sid: str) -> None:
+    """只有缓存里没有该 sid 时才真正登录。
+
+    MiAccount.login() 每次都会走完整的 serviceLogin，可能触发验证码和风控。
+    原先是无条件调用，于是「发现设备」「测试登录」「桥接重连」每点一次就登录一次，
+    加上 token 文件被删，几下就把账号送进风控。
+    """
+    if account.token is None and getattr(account, "token_store", None) is not None:
+        try:
+            account.token = await account.token_store.load_token()
+        except Exception:
+            account.token = None
+    if account.token and sid in account.token:
+        return                       # 复用缓存，零网络请求
+    await account.login(sid)
+
 # ---------------------------------------------------------------- 真机
 class RealSpeaker:
     is_mock = False
@@ -98,9 +159,15 @@ class RealSpeaker:
             token_store=store.resolve(self.cfg.get("token_path") or "data/.mi.token"),
             otp_callback=otp_callback,
         )
-        ok = await self.session.login("micoapi")
-        if not ok:
-            raise MiError("小米登录失败（账号/密码/验证码）")
+        blocked = in_cooldown()
+        if blocked:
+            raise MiError(blocked)
+        try:
+            await ensure_login(self.session, "micoapi")
+        except MiError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise friendly_mi_error(e)
         self.mina = MiNAService(self.session)
         devs = await self.mina.device_list() or []
         self.dids = devs
@@ -140,7 +207,7 @@ class RealSpeaker:
             try:
                 raw = await self.mina.get_latest_ask(did) or []
             except Exception as e:  # noqa: BLE001
-                self.log.warn("轮询音箱 %s 失败: %s" % (self.name_of(did), e))
+                self.log.warn("轮询音箱 %s 失败: %s" % (self.name_of(did), friendly_mi_error(e)))
                 continue
             out.extend(self._parse(raw, did))
         return out

@@ -19,7 +19,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import store
-from .mi import miservice_available
+from .mi import ensure_login, friendly_mi_error, in_cooldown, miservice_available
 
 LOG = store.LOG
 CACHE_DIR = os.path.join(store.DATA_DIR, "miot-cache")
@@ -182,7 +182,13 @@ class RealMiot:
             token_store=store.resolve(self.cfg.get("token_path") or "data/.mi.token"),
             otp_callback=otp_callback,
         )
-        await account.login("xiaomiio")
+        blocked = in_cooldown()
+        if blocked:
+            raise MiotError(blocked)
+        try:
+            await ensure_login(account, "xiaomiio")
+        except Exception as e:  # noqa: BLE001
+            raise MiotError(str(friendly_mi_error(e)))
         self._svc = MiIOService(account)
         return self._svc
 
@@ -231,20 +237,35 @@ class RealMiot:
         return await svc.miot_action(did, (siid, aiid), args)
 
     # ---- 同步门面
+    def _guard(self, coro, timeout: float, what: str):
+        """所有对外调用都过这一层：登录、风控、网络错误统一翻成人话。
+
+        注意不能只在登录处包——小米的 401/风控是在真正请求设备列表时才抛的。
+        """
+        blocked = in_cooldown()
+        if blocked:                       # 冷却期内一次都不打小米，免得把窗口越拖越长
+            raise MiotError(blocked)
+        try:
+            return _Loop.get().call(coro, timeout)
+        except MiotError as e:
+            raise MiotError(str(friendly_mi_error(e))) if "风控" in str(e) else e
+        except Exception as e:  # noqa: BLE001
+            raise MiotError("%s失败：%s" % (what, friendly_mi_error(e)))
+
     def devices(self, timeout: float = 40) -> List[Dict[str, Any]]:
-        return _Loop.get().call(self._devices(), timeout)
+        return self._guard(self._devices(), timeout, "读取米家设备")
 
     def spec(self, model: str, timeout: float = 40) -> Dict[str, Any]:
-        return _Loop.get().call(self._spec(model), timeout)
+        return self._guard(self._spec(model), timeout, "读取设备能力")
 
     def get(self, did, siid, piid, timeout: float = 25):
-        return _Loop.get().call(self._get(did, siid, piid), timeout)
+        return self._guard(self._get(did, siid, piid), timeout, "读取设备属性")
 
     def set(self, did, siid, piid, value, timeout: float = 25):
-        return _Loop.get().call(self._set(did, siid, piid, value), timeout)
+        return self._guard(self._set(did, siid, piid, value), timeout, "设置设备属性")
 
     def action(self, did, siid, aiid, args=None, timeout: float = 25):
-        return _Loop.get().call(self._action(did, siid, aiid, args or []), timeout)
+        return self._guard(self._action(did, siid, aiid, args or []), timeout, "执行设备动作")
 
 
 # ---------------------------------------------------------------- 演示设备

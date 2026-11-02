@@ -128,6 +128,15 @@ def check(port: int = 0) -> Dict[str, Any]:
         rows.append(_row(WARN, "运行模式", "演示模式 + 账号已填写",
                          "演示模式不会连真机；接管音箱请在「音箱接入」取消勾选"))
 
+    try:
+        from .mi import in_cooldown
+
+        blocked = in_cooldown()
+        if blocked:
+            rows.append(_row(BAD, "小米登录", blocked, "等风控解除后再点「测试登录」"))
+    except Exception:
+        pass
+
     tok = store.resolve(cfg["mi"].get("token_path") or "data/.mi.token")
     if os.path.exists(tok):
         rows.append(_row(OK, "登录缓存", "%s（换机后需重新登录）" % os.path.relpath(tok, store.ROOT)))
