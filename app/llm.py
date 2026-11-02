@@ -241,6 +241,10 @@ def stream_or_chat(
         retry_plain = ("HTTP 400" in msg or "HTTP 404" in msg
                        or "流式读取中断" in msg or "非 JSON" in msg)
         if retry_plain:
+            import sys as _sys
+
+            print("[llm] 端点不支持流式，本次退回普通请求：%s" % msg.splitlines()[0][:120],
+                  file=_sys.stderr, flush=True)
             return chat(messages, cfg, tools)
         raise
 

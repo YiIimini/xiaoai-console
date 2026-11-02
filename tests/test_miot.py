@@ -189,3 +189,39 @@ class ToolDispatchTest(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoSilentDemoTest(_Base):
+    """取消演示后，缺依赖必须报错，不能偷偷换成假设备。"""
+
+    def test_missing_dependency_is_loud(self):
+        cfg = store.load_config()
+        cfg["mi"]["mock"] = False
+        cfg["miot"]["mock"] = False
+        store.save_config(cfg)
+        miot._CLIENT = None
+        miot._CLIENT_KEY = ""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *a, **k):
+            if name == "miservice":
+                raise ImportError("模拟缺依赖")
+            return real_import(name, *a, **k)
+
+        builtins.__import__ = fake_import
+        try:
+            client = miot.make_client({"mock": False})
+            self.assertIsInstance(client, miot.MissingDependencyMiot)
+            with self.assertRaises(miot.MiotError) as ctx:
+                client.devices()
+            self.assertIn("miservice", str(ctx.exception))
+        finally:
+            builtins.__import__ = real_import
+
+    def test_demo_flag_still_works(self):
+        cfg = store.load_config()
+        cfg["miot"]["mock"] = True
+        store.save_config(cfg)
+        self.assertIsInstance(miot.make_client({"mock": False}), miot.MockMiot)

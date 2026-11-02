@@ -123,7 +123,10 @@ class Handler(BaseHTTPRequestHandler):
                 "bridge": BR.status(),
                 "miservice": miservice_available(),
                 "otp": OTP.snapshot(),
-                "mock": bool(cfg["mi"].get("mock")) or not miservice_available(),
+                # mock 只表示「用户选了演示模式」，缺依赖另用 deps_ok 表达，
+                # 否则取消勾选后界面仍显示演示，看不出是环境问题
+                "mock": bool(cfg["mi"].get("mock")),
+                "deps_ok": miservice_available(),
                 "memory": memory.MEM.stats(),
                 "version": "1.0.0",
             })

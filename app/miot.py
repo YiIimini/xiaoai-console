@@ -19,6 +19,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import store
+from .mi import miservice_available
 
 LOG = store.LOG
 CACHE_DIR = os.path.join(store.DATA_DIR, "miot-cache")
@@ -337,6 +338,27 @@ class MockMiot:
         return 0
 
 
+class MissingDependencyMiot:
+    """想接真米家但没有 miservice：明确失败，别拿假设备糊弄。"""
+
+    is_mock = False
+
+    def __init__(self, cfg: Dict[str, Any]) -> None:
+        self.cfg = cfg
+
+    def _boom(self, *_a, **_k):
+        raise MiotError(
+            "米家已关闭演示设备，但当前 Python 环境没有 miservice，读不到真设备。\n"
+            "在运行工作台的那个 Python 里装一下：<那个 python> -m pip install miservice"
+        )
+
+    devices = _boom
+    spec = _boom
+    get = _boom
+    set = _boom
+    action = _boom
+
+
 def make_client(mi_cfg: Dict[str, Any]) -> Any:
     miot_cfg = store.load_config()["miot"]
     if miot_cfg.get("mock") or mi_cfg.get("mock"):
@@ -344,7 +366,7 @@ def make_client(mi_cfg: Dict[str, Any]) -> Any:
     try:
         import miservice  # noqa: F401
     except Exception:
-        return MockMiot(mi_cfg)
+        return MissingDependencyMiot(mi_cfg)
     return RealMiot(mi_cfg)
 
 
@@ -356,7 +378,10 @@ def client() -> Any:
     """按当前配置返回客户端（账号/模式变化时重建）。"""
     global _CLIENT, _CLIENT_KEY
     cfg = store.load_config()
-    key = "%s|%s|%s" % (cfg["mi"].get("username"), cfg["mi"].get("mock"), cfg["miot"].get("mock"))
+    key = "%s|%s|%s|%s" % (
+        cfg["mi"].get("username"), cfg["mi"].get("mock"), cfg["miot"].get("mock"),
+        "dep" if miservice_available() else "nodep",
+    )
     if _CLIENT is None or key != _CLIENT_KEY:
         _CLIENT = make_client(cfg["mi"])
         _CLIENT_KEY = key

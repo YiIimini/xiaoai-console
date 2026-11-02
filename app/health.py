@@ -89,7 +89,16 @@ def check(port: int = 0) -> Dict[str, Any]:
     if not miot_cfg.get("enabled", True):
         rows.append(_row(OK, "米家接入", "已关闭"))
     else:
-        mode = "演示设备" if (miot_cfg.get("mock") or cfg["mi"].get("mock")) else "真实设备"
+        demo = bool(miot_cfg.get("mock")) or bool(cfg["mi"].get("mock"))
+        if demo:
+            mode = "演示设备"
+        else:
+            try:
+                import miservice  # noqa: F401
+
+                mode = "真实设备"
+            except Exception:
+                mode = "真实设备（缺 miservice，读不到）"
         write = "可写" if miot_cfg.get("allow_write", True) else "只读"
         rows.append(_row(OK, "米家接入", "%s · %s" % (mode, write)))
         try:

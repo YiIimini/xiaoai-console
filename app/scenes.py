@@ -29,6 +29,7 @@ from . import miot, store
 
 SCENES_PATH = os.path.join(store.DATA_DIR, "scenes.json")
 
+#: 仅演示模式预置；设备名对应 app/mi.py 的 MOCK_DEVICES
 EXAMPLE = {
     "回家": {
         "desc": "开客厅灯、开插座",
@@ -60,8 +61,13 @@ EXAMPLE = {
 
 def load() -> Dict[str, Any]:
     if not os.path.exists(SCENES_PATH):
-        save(EXAMPLE)
-        return dict(EXAMPLE)
+        # 示例用的是演示设备名（客厅灯/书桌插座），真机模式下跑必然全失败，
+        # 所以只在演示模式里预置，别把测试数据塞进用户配置
+        cfg = store.load_config()
+        demo = bool(cfg["mi"].get("mock")) or bool(cfg.get("miot", {}).get("mock"))
+        seed = dict(EXAMPLE) if demo else {}
+        save(seed)
+        return dict(seed)
     try:
         with open(SCENES_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)

@@ -169,3 +169,38 @@ class AgentMemoryWiringTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SceneSeedTest(unittest.TestCase):
+    """示例场景用演示设备名，真机模式下不该预置。"""
+
+    def setUp(self):
+        import copy as _copy
+
+        self._cfg = _copy.deepcopy(store.load_config())
+        self.dir = tempfile.mkdtemp()
+        from app import scenes
+
+        self.scenes = scenes
+        self._orig = scenes.SCENES_PATH
+        scenes.SCENES_PATH = os.path.join(self.dir, "scenes.json")
+
+    def tearDown(self):
+        self.scenes.SCENES_PATH = self._orig
+        store.save_config(self._cfg)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_real_mode_starts_empty(self):
+        cfg = store.load_config()
+        cfg["mi"]["mock"] = False
+        cfg["miot"]["mock"] = False
+        store.save_config(cfg)
+        self.assertEqual(self.scenes.load(), {})
+
+    def test_demo_mode_seeds_examples(self):
+        cfg = store.load_config()
+        cfg["mi"]["mock"] = True
+        store.save_config(cfg)
+        seeded = self.scenes.load()
+        self.assertIn("回家", seeded)
+        self.assertGreaterEqual(len(seeded), 1)

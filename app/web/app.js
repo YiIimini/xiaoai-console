@@ -155,12 +155,23 @@
     pb.className = "pill " + cls + (stt === "running" ? " live" : "");
 
     const pm = $("#pill-mode");
-    pm.textContent = st.mock ? "演示模式" : "真机模式";
-    pm.className = "pill " + (st.mock ? "warn" : "live");
+    if (st.mock) {
+      pm.textContent = "演示模式";
+      pm.className = "pill warn";
+    } else if (st.deps_ok === false) {
+      pm.textContent = "真机·缺依赖";
+      pm.className = "pill err";
+      pm.title = "已取消演示模式，但当前 Python 环境缺 miservice，接不了真机";
+    } else {
+      pm.textContent = "真机模式";
+      pm.className = "pill live";
+      pm.title = "";
+    }
 
     const pd = $("#pill-miservice");
-    pd.textContent = "依赖 " + (st.miservice ? "已安装" : "缺失");
-    pd.className = "pill " + (st.miservice ? "ok" : "err");
+    const depsOk = st.deps_ok !== undefined ? st.deps_ok : st.miservice;
+    pd.textContent = "依赖 " + (depsOk ? "已安装" : "缺失");
+    pd.className = "pill " + (depsOk ? "ok" : "err");
 
     const stats = (b.stats || {});
     $("#pill-turns").textContent = "语音回合 " + (stats.turns || 0);
