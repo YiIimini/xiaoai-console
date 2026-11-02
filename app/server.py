@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from . import bridge, export, health, llm, memory, miot, scenes, store
 from .console import safe_print
+from . import mi as mi_mod
 from .mi import OTP, MiError, miservice_available
 
 ROOT = store.ROOT
@@ -228,6 +229,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._diag_llm()
             if path == "/api/diag/mi":
                 return self._diag_mi()
+            if path == "/api/mi/reset-fingerprint":
+                try:
+                    info = mi_mod.reset_fingerprint()
+                    LOG.warn("已重置登录指纹：%s。请等页面提示后再点一次「测试登录」"
+                             % ("、".join(info["removed"]) or "无缓存"))
+                    return self._json({"ok": True, **info,
+                                       "note": "已清除。现在点一次「测试登录」，小米会下发验证码。"})
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"ok": False, "error": str(e)}, 500)
             if path == "/api/mi/otp/cancel":
                 OTP.cancel()
                 LOG.info("用户取消了验证码输入")

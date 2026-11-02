@@ -432,6 +432,18 @@
     refresh();
   });
 
+  $("#btn-reset-fp").addEventListener("click", async () => {
+    if (!confirm("将清除登录 token 与设备指纹，下次登录等于一台全新设备。确定？")) return;
+    const box = $("#mi-result");
+    box.className = "result";
+    box.textContent = "正在重置…";
+    const r = await api("/api/mi/reset-fingerprint", {});
+    box.className = "result " + (r.ok ? "ok" : "err");
+    box.textContent = r.ok ? (r.note || "已清除") : (r.error || "失败");
+    toast(r.ok ? "已重置，请点一次「测试登录」" : (r.error || "失败"), !r.ok);
+    refresh();
+  });
+
   $("#btn-otp-cancel").addEventListener("click", async () => {
     await api("/api/mi/otp/cancel", {});
     $("#otp-box").hidden = true;

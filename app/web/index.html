@@ -185,7 +185,11 @@
             <button class="btn" id="btn-discover" title="读取账号下的音箱列表，不修改任何配置">发现设备</button>
             <button class="btn" id="btn-diag-mi" title="完整走一遍登录流程，确认账号密码和验证码是否通过">测试登录</button>
             <button class="btn primary" id="btn-save-mi">保存</button>
+            <button class="btn danger" id="btn-reset-fp"
+              title="清掉登录 token 和设备指纹，让小米把本机当成一台全新设备。手机 App 正常、只有这里报 20024 时用它">重置登录指纹</button>
           </div>
+          <p class="note">「重置登录指纹」只在<b>提示风控（20024 / client withdraw）而手机米家 App 能正常用</b>时点。它会删除
+            <code>data/.mi.token</code> 与 <code>data/.mi.device</code>，下一次登录等于全新设备，小米会下发一条验证码。</p>
 
           <div class="note-block">
             <b>首次登录可能被要求验证码。</b>小米会在新设备或新 IP 上下发短信/邮箱验证码，弹出的输入框填一次即可；通过后 token 缓存在

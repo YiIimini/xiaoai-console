@@ -147,6 +147,28 @@ def stable_device_id() -> str:
     return val
 
 
+def reset_fingerprint() -> Dict[str, Any]:
+    """清掉 token 与设备指纹，让下一次登录看起来来自一台全新设备。
+
+    手机 App 正常、只有这台机器被 20024 时，这是最有效的一步——
+    小米限制的是「这个客户端」，不是账号。
+    """
+    removed = []
+    for path, label in (
+        (store.resolve("data/.mi.token"), "登录 token"),
+        (DEVICE_FILE, "设备指纹"),
+    ):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                removed.append(label)
+        except OSError as e:
+            raise MiError("删除 %s 失败：%s" % (label, e))
+    _COOLDOWN.update({"until": 0.0, "reason": ""})
+    _save_cooldown()
+    return {"removed": removed}
+
+
 def _load_cooldown() -> None:
     try:
         with open(COOLDOWN_FILE, "r", encoding="utf-8") as f:
@@ -203,10 +225,12 @@ def friendly_mi_error(exc: Exception) -> "MiError":
             set_cooldown(secs, hint)
             return MiError(
                 hint + "\n"
-                "已经停止重试，%d 分钟内不再登录，请按这个顺序处理：\n"
-                "1) 什么都别点，等 30–60 分钟（时间窗由小米控制，重试只会延长）\n"
-                "2) 手机上的米家 App 正常登录一次，确认账号没被临时限制\n"
-                "3) 回来点一次「测试登录」，通过后 token 会缓存在 data/.mi.token，之后不再重复登录\n\n"
+                "已经停止重试，%d 分钟内不再登录。\n"
+                "如果手机上的米家 App 能正常用，说明账号本身没问题，是这台设备的登录指纹被限制了：\n"
+                "1) 先等冷却走完；仍不通就点「重置登录指纹」，让小米把它当成一台全新设备\n"
+                "2) 重置后只点一次「测试登录」——小米会发一条验证码，填完即通\n"
+                "3) 通过后 token 缓存在 data/.mi.token，之后不再重复登录\n"
+                "4) 若重置后依旧 20024，说明限制是按 IP / 时间窗生效的，隔几小时再试\n\n"
                 "原始错误：" % (secs // 60) + text[:200]
             )
     return MiError(text)

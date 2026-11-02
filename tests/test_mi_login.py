@@ -81,7 +81,8 @@ class RiskControlTest(unittest.TestCase):
             "Failed to send OTP SMS: {'reason': '用户行为被限制', 'code': 20024}"))
         text = str(err)
         self.assertIn("风控", text)
-        self.assertIn("等 30–60 分钟", text)
+        self.assertIn("重置登录指纹", text)      # 给出可执行的下一步
+        self.assertIn("账号本身没问题", text)     # 手机能用时别让用户去查账号
         self.assertIn("原始错误", text)
 
     def test_cooldown_blocks_next_attempt(self):
