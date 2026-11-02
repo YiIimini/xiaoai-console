@@ -251,7 +251,8 @@ class RealMiot:
         try:
             return _Loop.get().call(coro, timeout)
         except MiotError as e:
-            raise MiotError(str(friendly_mi_error(e))) if "风控" in str(e) else e
+            # 已经是人话就不再包装（friendly_mi_error 本身幂等）
+            raise MiotError(str(friendly_mi_error(e)))
         except Exception as e:  # noqa: BLE001
             raise MiotError("%s失败：%s" % (what, friendly_mi_error(e)))
 

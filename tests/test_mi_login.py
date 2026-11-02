@@ -187,3 +187,50 @@ class StrategyTest(unittest.TestCase):
         acc.login_calls.clear()
         asyncio.run(mi.ensure_login(acc, "micoapi"))
         self.assertEqual(acc.login_calls, [], "已有 token 还在重登")
+
+
+class IdempotentMessageTest(unittest.TestCase):
+    """错误文案翻译必须幂等——它会在 _ensure / _guard / 日志 三处各调一次。"""
+
+    def setUp(self):
+        mi._COOLDOWN.update({"until": 0.0, "reason": ""})
+
+    def tearDown(self):
+        mi._COOLDOWN.update({"until": 0.0, "reason": ""})
+        mi._save_cooldown()
+
+    def test_no_nesting(self):
+        raw = Exception("Failed to send OTP SMS: {'reason': '用户行为被限制', 'code': 20024}")
+        one = str(mi.friendly_mi_error(raw))
+        two = str(mi.friendly_mi_error(Exception(one)))
+        three = str(mi.friendly_mi_error(Exception(two)))
+        self.assertEqual(one, two, "第二次包装产生了新内容")
+        self.assertEqual(one, three)
+        self.assertEqual(one.count("原始错误"), 1)
+
+    def test_cooldown_message_not_rewrapped(self):
+        mi.friendly_mi_error(Exception("用户行为被限制"))   # 触发冷却
+        cooldown_text = mi.in_cooldown()
+        again = str(mi.friendly_mi_error(Exception(cooldown_text)))
+        self.assertEqual(again, cooldown_text)
+
+    def test_through_miot_guard(self):
+        """走 miot._guard 这一层也不能变长。"""
+        from app import miot
+
+        class Boom(miot.RealMiot):
+            def __init__(self):
+                pass
+
+            async def _devices(self):
+                raise Exception("Failed to send OTP SMS: {'reason': '用户行为被限制'}")
+
+        client = Boom.__new__(Boom)
+        try:
+            client.devices(timeout=5)
+        except miot.MiotError as e:
+            msg = str(e)
+        else:
+            self.fail("应当抛错")
+        self.assertEqual(msg.count("原始错误"), 1)
+        self.assertLess(len(msg), 700)

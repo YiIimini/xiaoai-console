@@ -466,7 +466,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             from .mi import friendly_mi_error
 
-            LOG.error("读取米家设备失败: %s" % friendly_mi_error(e))
+            msg = str(friendly_mi_error(e))
+            LOG.error(msg if msg.startswith("读取米家设备") else "读取米家设备失败: " + msg)
             return self._json({"ok": False, "error": str(e)}, 502)
 
     def _save_scenes(self, body: Dict[str, Any]) -> None:

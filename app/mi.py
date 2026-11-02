@@ -263,9 +263,19 @@ def _wt_seconds(text: str) -> int:
         return 600
 
 
+#: 这些短语说明已经是人话了，再翻一次就会套娃
+FRIENDLY_MARKERS = ("已经停止重试", "小米风控冷却中", "原始错误：", "小米作废了当前会话")
+
+
 def friendly_mi_error(exc: Exception) -> "MiError":
-    """把小米那串 JSON 翻成能照做的话，并识别风控。"""
+    """把小米那串 JSON 翻成能照做的话，并识别风控。
+
+    必须幂等：这个函数会在 _ensure / _guard / 日志 三处被调用，
+    而风控文案本身又把原始错误拼在末尾——不做幂等就会一层套一层。
+    """
     text = str(exc)
+    if any(m in text for m in FRIENDLY_MARKERS):
+        return MiError(text)
     for marker, hint in RISK_MARKERS:
         if marker in text:
             secs = _wt_seconds(text)
