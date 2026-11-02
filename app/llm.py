@@ -243,3 +243,54 @@ def stream_or_chat(
         if retry_plain:
             return chat(messages, cfg, tools)
         raise
+
+
+def list_models(cfg: Dict[str, Any]) -> List[str]:
+    """向端点要模型列表（OpenAI 兼容的 GET /models）。
+
+    模型 ID 各家随时会变，写死迟早过时——填了 Key 就该自己列出来。
+    """
+    api_key = (cfg.get("api_key") or "").strip()
+    if not api_key:
+        raise LLMError("先填 API Key，才能拉取模型列表")
+    base = (cfg.get("base_url") or "").strip().rstrip("/")
+    if not base:
+        raise LLMError("未配置 LLM base_url")
+    url = base + "/models"
+    req = urllib.request.Request(
+        url, method="GET",
+        headers={"Authorization": "Bearer " + api_key, "User-Agent": "xiaoai-console/1.0"},
+    )
+    timeout = min(30, int(cfg.get("timeout", 90)))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            pass
+        raise LLMError("拉取模型列表失败 HTTP %s: %s" % (e.code, detail or e.reason))
+    except socket.timeout:
+        raise LLMError("拉取模型列表超时")
+    except urllib.error.URLError as e:
+        raise LLMError("连接失败: %s" % (e.reason,))
+
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise LLMError("模型列表不是 JSON: " + raw[:200])
+
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise LLMError("端点没有返回 data 数组，可能不支持 /models")
+    out = []
+    for it in items:
+        if isinstance(it, dict) and it.get("id"):
+            out.append(str(it["id"]))
+        elif isinstance(it, str):
+            out.append(it)
+    if not out:
+        raise LLMError("模型列表为空")
+    return sorted(set(out))

@@ -163,6 +163,15 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             LOG.ok("已导出会话记录 %d 轮（%s）" % (len(turns), fmt))
             return self.wfile.write(body)
+        if path == "/api/llm/models":
+            cfg = store.load_config()["llm"]
+            try:
+                models = llm.list_models(cfg)
+                LOG.ok("拉取到 %d 个模型" % len(models))
+                return self._json({"ok": True, "models": models, "current": cfg.get("model")})
+            except llm.LLMError as e:
+                LOG.warn("模型列表拉取失败: %s" % e)
+                return self._json({"ok": False, "error": str(e)}, 502)
         if path == "/api/memory":
             return self._json({"ok": True, **memory.MEM.stats()})
         if path == "/api/miot/devices":

@@ -123,6 +123,16 @@
       <section class="panel" data-panel="mi">
         <div class="box">
           <h2>小米账号与设备</h2>
+          <div class="steps">
+            <b>第一次配置，按这四个步骤走：</b>
+            <ol>
+              <li>填上面的<b>小米账号和密码</b>，点「保存」。（建议用小号，同账号会顶掉手机小爱）</li>
+              <li>点「<b>发现设备</b>」——它会从小米云端把你这账号下的音箱<b>连同 DID 和型号一起列出来</b>，不需要你手抄。</li>
+              <li>表格里每行左侧勾上「接管」，保存。只有一台时可以直接点那一行，DID 和型号会自动填好。</li>
+              <li>确认是接真机后，<b>取消勾选「演示模式」</b>，回顶部点「启动桥接」。</li>
+            </ol>
+            <p class="note" style="margin:6px 0 0">找不到设备？先在米家 App 里确认这台音箱确实挂在这个账号下、且已通电联网；账号密码错误会在这一步报出来。</p>
+          </div>
           <p class="hint">这一页决定「从哪台音箱取语音、往哪台音箱播报」。填完记得点保存，再回顶部启动桥接。</p>
 
           <div class="form" data-section="mi">
@@ -137,24 +147,26 @@
             </label>
 
             <label>设备 DID
-              <input name="did" placeholder="点下方「发现设备」后点一行自动填入">
-              <span class="note">音箱的唯一标识。家里有多台就填要接管的那台；留空则默认取账号下第一台。</span>
+              <input name="did" placeholder="点「发现设备」会自动带回，不用手抄">
+              <span class="note"><b>不用自己找</b>：DID 是小米云里设备的内部编号，手机端一般看不到。点下方「发现设备」会直接列出来并填好。手动填也行——家里多台就填要接管的那台，留空则默认用第一台。</span>
             </label>
 
             <label>硬件型号
-              <select name="hardware">
-                <option value="LX06">LX06 · 小爱音箱 Pro</option>
-                <option value="L06A">L06A · 小爱音箱 Pro</option>
-                <option value="L05B">L05B · 小爱音箱 Play</option>
-                <option value="L05C">L05C · Play 增强版</option>
-                <option value="L07A">L07A · 小爱音箱 Art</option>
-                <option value="LX5A">LX5A · 小米 AI 音箱</option>
-                <option value="X08A">X08A · 小爱音箱 HD</option>
-                <option value="X10A">X10A · 小爱触屏音箱</option>
-                <option value="LX04">LX04 · 触屏音箱</option>
-                <option value="MOCK">MOCK · 演示</option>
-              </select>
-              <span class="note">只影响能力判断（是否走播放/音量接口），纯文本播报一般填错也能用。不确定就按「发现设备」里显示的型号选。</span>
+              <input name="hardware" list="hw-codes" placeholder="发现设备后自动带回，例如 LX06">
+              <datalist id="hw-codes">
+                <option value="LX06">小爱音箱 Pro</option>
+                <option value="L06A">小爱音箱 Pro</option>
+                <option value="LX5A">小米 AI 音箱</option>
+                <option value="L05B">小爱音箱 Play</option>
+                <option value="L05C">Play 增强版</option>
+                <option value="L07A">小爱音箱 Art</option>
+                <option value="X08A">小爱音箱 HD</option>
+                <option value="X10A">小爱触屏音箱</option>
+                <option value="LX04">触屏音箱</option>
+                <option value="OH2P">小米 Sound Pro</option>
+                <option value="MOCK">演示</option>
+              </datalist>
+              <span class="note"><b>也不用自己猜</b>：点「发现设备」会把真实型号带回来。它只影响能力判断（音量/播放接口），填错通常也能正常播报；能直接输入任意型号，不受列表限制。</span>
             </label>
 
             <label>轮询间隔（秒）
@@ -213,9 +225,13 @@
               <span class="note">只存本机 <code>data/config.json</code>。输入框留空＝保持原 Key 不变；想换 Key 就直接覆盖输入。</span>
             </label>
 
-            <label>模型名
-              <input name="model" placeholder="deepseek-chat">
-              <span class="note">必须和该端点注册的模型名完全一致，写错会返回 <code>model not found</code>。点「测试连通」能立刻验证。</span>
+            <label class="full">模型
+              <div class="row" style="margin:0">
+                <input name="model" list="model-list" placeholder="点右侧「获取列表」自动填充，或手动输入" style="flex:1">
+                <button class="btn" id="btn-list-models" type="button" title="向该端点请求 /models，列出当前可用的模型 ID">获取模型列表</button>
+              </div>
+              <datalist id="model-list"></datalist>
+              <span class="note"><b>不写死</b>：各家模型 ID 会更新（改名、下线、上新），所以这里直接从你的 Key 所属端点拉取。填好接口地址和 Key 后点「获取模型列表」，下拉里选一个即可；拉不到再手动填。</span>
             </label>
 
             <label>温度

@@ -63,6 +63,14 @@
   });
 
   /* ------------------------------------------------ 配置表单 */
+  // 程序化填值也要走事件，否则后台轮询会把刚填的内容冲掉
+  function setField(el, value) {
+    if (!el) return;
+    el.value = value == null ? "" : value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   function fillForm(section, cfg) {
     const box = $(`.form[data-section="${section}"]`);
     if (!box || !cfg) return;
@@ -343,13 +351,24 @@
     MI_DIDS = (((STATE || {}).config || {}).mi || {}).dids || [];
     tb.innerHTML = (list || []).map(d => {
       const on = MI_DIDS.includes(d.did) ? "checked" : "";
-      return `<tr><td><input type="checkbox" class="pick-did" data-did="${esc(d.did)}" ${on}></td>
+      return `<tr data-did="${esc(d.did)}" data-hw="${esc(d.hardware || "")}">
+      <td><input type="checkbox" class="pick-did" data-did="${esc(d.did)}" ${on}></td>
       <td>${esc(d.name || "—")}</td><td>${esc(d.hardware || "—")}</td><td><code>${esc(d.did)}</code></td></tr>`;
     }).join("");
     tbl.hidden = !(list && list.length);
     const dn = $("#dev-note");
     if (dn) dn.hidden = !(list && list.length);
-    if (list && list.length) box.textContent = `发现 ${list.length} 台设备。`;
+    if (list && list.length > 1) {
+      box.textContent = `发现 ${list.length} 台设备：勾选「接管」可同时管理多台；只想接管一台就点那一行，DID 和型号会自动填好。`;
+    }
+    // 只有一台就直接把 DID 和型号填好，省掉手抄
+    if (list && list.length === 1) {
+      const d = list[0];
+      const f = (n) => $(`.panel[data-panel="mi"] input[name="${n}"]`);
+      setField(f("did"), d.did || "");
+      if (d.hardware) setField(f("hardware"), d.hardware);
+      box.textContent = `发现 1 台设备：${d.name || d.did}，DID 与型号已自动填入。`;
+    }
     $$("#dev-table .pick-did").forEach(cb => {
       cb.addEventListener("change", () => {
         const did = cb.dataset.did;
@@ -363,9 +382,11 @@
     $$("#dev-table tbody tr").forEach(tr => {
       tr.addEventListener("click", (e) => {
         if (e.target.tagName === "INPUT") return;
-        const did = tr.querySelector("code").textContent;
-        $('#mi input[name="did"]').value = did;
-        toast("已填入单个 DID");
+        const did = tr.dataset.did || tr.querySelector("code").textContent;
+        const hw = (tr.dataset.hw || "").trim();
+        setField($('.panel[data-panel="mi"] input[name="did"]'), did);
+        if (hw) setField($('.panel[data-panel="mi"] input[name="hardware"]'), hw);
+        toast("已填入 DID" + (hw ? "（型号 " + hw + "）" : ""));
       });
     });
   }
@@ -398,6 +419,36 @@
     const r = await api("/api/mi/otp", { code });
     toast(r.ok ? "已提交验证码" : (r.error || "失败"), !r.ok);
     $("#otp-input").value = "";
+  });
+
+  $("#btn-list-models").addEventListener("click", async () => {
+    const btn = $("#btn-list-models");
+    const box = $("#llm-result");
+    btn.disabled = true;
+    btn.textContent = "拉取中…";
+    box.className = "result";
+    box.textContent = "正在向端点请求模型列表（会先用当前已保存的接口地址与 Key）…";
+    try {
+      const r = await api("/api/llm/models");
+      if (!r.ok) {
+        box.className = "result err";
+        box.textContent = "拉取失败：" + (r.error || "未知") +
+          "\n\n提示：先点「保存」把接口地址和 Key 存下来，再获取；个别端点不提供 /models，只能手动填。";
+        return;
+      }
+      const dl = $("#model-list");
+      dl.innerHTML = r.models.map(m => `<option value="${esc(m)}"></option>`).join("");
+      const cur = $('.panel[data-panel="llm"] input[name="model"]');
+      if (cur && !cur.value && r.models.length) {
+        setField(cur, (r.current && r.models.includes(r.current)) ? r.current : r.models[0]);
+      }
+      box.className = "result ok";
+      box.textContent = `拉到 ${r.models.length} 个模型：\n` + r.models.slice(0, 40).join("、") +
+        (r.models.length > 40 ? " …" : "") + "\n\n在「模型」输入框里点一下就能选。";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "获取模型列表";
+    }
   });
 
   $("#btn-diag-llm").addEventListener("click", async () => {
