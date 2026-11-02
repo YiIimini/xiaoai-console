@@ -87,6 +87,7 @@ def handler_class():
         sys.path.insert(0, str(h))
     from app.server import Handler  # noqa: WPS433  延迟导入，避免宿主启动即加载
 
+    _record_load_time()
     _state["handler"] = Handler
     return Handler
 
@@ -97,6 +98,7 @@ def mount(outer, path: str) -> bool:
         return False
 
     warn_if_standalone_running()
+    warn_if_stale()
 
     try:
         Handler = handler_class()
@@ -166,6 +168,40 @@ def mount(outer, path: str) -> bool:
 
 
 _warned = {"done": False}
+_stale = {"checked": False}
+
+
+def _module_mtime() -> float:
+    """当前进程里那份 app/server.py 的真实修改时间。"""
+    import sys as _sys
+
+    mod = _sys.modules.get("app.server")
+    path = getattr(mod, "__file__", None)
+    try:
+        return os.path.getmtime(path) if path else 0.0
+    except OSError:
+        return 0.0
+
+
+def _record_load_time() -> None:
+    global _LOADED_AT
+    _LOADED_AT = _module_mtime()
+
+
+_LOADED_AT = 0.0
+
+
+def warn_if_stale() -> None:
+    """宿主不重启就一直用内存里的旧模块，改完代码会以为「没生效」。"""
+    if _stale["checked"]:
+        return
+    _stale["checked"] = True
+    if not _LOADED_AT:
+        return
+    now = _module_mtime()
+    if now > _LOADED_AT + 1:
+        print("[xiaoai] 提示：小爱工作台代码在加载后被更新过，"
+              "当前进程仍在用旧版本。重启宿主工作台后才会生效。", flush=True)
 
 
 def warn_if_standalone_running() -> None:

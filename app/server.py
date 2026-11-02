@@ -163,6 +163,11 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             LOG.ok("已导出会话记录 %d 轮（%s）" % (len(turns), fmt))
             return self.wfile.write(body)
+        if path == "/api/diag/llm":
+            return self._diag_llm()
+        if path == "/api/diag/mi":
+            return self._diag_mi()
+
         if path == "/api/llm/models":
             cfg = store.load_config()["llm"]
             try:
@@ -188,6 +193,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/portable/machine":
             return self._json({"ok": True, **health.machine_info()})
         if path.startswith("/api/"):
+            if path in _POST_ONLY_PATHS:
+                return self._err("接口 %s 只支持 POST，当前是 GET" % path, 405)
             return self._err("未知接口: " + path, 404)
         return self._static(path)
 
@@ -261,6 +268,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/history/clear":
                 HIST.clear()
                 return self._json({"ok": True})
+            if path in _GET_ONLY_PATHS or path.startswith("/api/portable/export"):
+                return self._err("接口 %s 只支持 GET，当前是 POST" % path, 405)
             return self._err("未知接口: " + path, 404)
         except MiError as e:
             return self._err("小米接口: %s" % e, 502)
@@ -561,6 +570,21 @@ SERVER_PORT = 0
 
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+# 只支持 POST / 只支持 GET 的接口，用于把「方法用错」和「路径不存在」区分开
+_POST_ONLY_PATHS = {
+    "/api/config", "/api/bridge/start", "/api/bridge/stop", "/api/bridge/restart",
+    "/api/chat", "/api/chat/stream", "/api/tts", "/api/mock/say",
+    "/api/mi/otp", "/api/history/clear", "/api/memory/clear",
+    "/api/miot/get", "/api/miot/set", "/api/scenes", "/api/scenes/run",
+    "/api/portable/import", "/api/portable/default-repo",
+}
+_GET_ONLY_PATHS = {
+    "/api/ping", "/api/state", "/api/history", "/api/history/export",
+    "/api/logs", "/api/logs/stream", "/api/devices", "/api/memory",
+    "/api/llm/models", "/api/miot/devices", "/api/miot/spec",
+    "/api/portable/selfcheck", "/api/portable/machine",
+}
 
 
 def serve(host: str, port: int) -> None:
