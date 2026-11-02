@@ -57,12 +57,14 @@ class ResolveTest(unittest.TestCase):
         saved = dict(os.environ)
         os.environ.pop("XIAOAI_HOME", None)
         xiaoai_app._state["home"] = None
+        missing = Path("/definitely/not/here")
         orig = xiaoai_app._candidates
-        xiaoai_app._candidates = lambda: iter([Path("/definitely/not/here")])
+        xiaoai_app._candidates = lambda: iter([missing])
         try:
             self.assertIsNone(xiaoai_app.home())
             msg = xiaoai_app.error()
-            self.assertIn("/definitely/not/here", msg)
+            # 路径在 Windows 上会规范成反斜杠，按 str(Path) 比对
+            self.assertIn(str(missing), msg)
         finally:
             xiaoai_app._candidates = orig
             xiaoai_app._state["home"] = None
