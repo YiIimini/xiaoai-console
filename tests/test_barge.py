@@ -85,3 +85,29 @@ class ConfigDefaultTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpeakerSelectionTest(unittest.TestCase):
+    """取消演示模式后不能偷偷退回演示。"""
+
+    def test_mock_flag_wins(self):
+        from app.mi import MockSpeaker, make_speaker
+
+        cfg = {"mock": True}
+        self.assertIsInstance(make_speaker(cfg, _Log()), MockSpeaker)
+
+    def test_missing_dependency_is_loud(self):
+        import asyncio
+
+        from app import mi
+
+        orig = mi.miservice_available
+        mi.miservice_available = lambda: False
+        try:
+            spk = mi.make_speaker({"mock": False}, _Log())
+            self.assertIsInstance(spk, mi.MissingDependencySpeaker)
+            with self.assertRaises(mi.MiError) as ctx:
+                asyncio.run(spk.connect())
+            self.assertIn("miservice", str(ctx.exception))
+        finally:
+            mi.miservice_available = orig

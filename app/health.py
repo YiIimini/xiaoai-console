@@ -108,6 +108,13 @@ def check(port: int = 0) -> Dict[str, Any]:
             pass
 
     # 7) token 缓存
+    if not cfg["mi"].get("mock"):
+        try:
+            import miservice  # noqa: F401
+        except Exception:
+            rows.append(_row(BAD, "读取设备依赖", "未装 miservice，接不了真机",
+                             "在当前 Python 里执行：python -m pip install miservice（或用 ./start.sh 启动）"))
+
     if cfg["mi"].get("mock") and has_user:
         rows.append(_row(WARN, "运行模式", "演示模式 + 账号已填写",
                          "演示模式不会连真机；接管音箱请在「音箱接入」取消勾选"))

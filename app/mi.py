@@ -250,7 +250,53 @@ class MockSpeaker:
         return True
 
 
+class MissingDependencySpeaker:
+    """想接真机但环境里没有 miservice：明确失败，不要假装在工作。"""
+
+    is_mock = False
+
+    def __init__(self, mi_cfg: Dict[str, Any], log) -> None:
+        self.cfg = mi_cfg
+        self.log = log
+        self.dids = []
+
+    async def connect(self) -> None:
+        raise MiError(
+            "已取消演示模式，但当前 Python 环境没有安装 miservice，接不了真机。\n"
+            "在运行工作台的那个 Python 里装一下：<那个 python> -m pip install miservice"
+        )
+
+    async def devices(self):
+        raise MiError("缺少 miservice")
+
+    def resolve_dids(self):
+        return []
+
+    def resolve_did(self) -> str:
+        raise MiError("缺少 miservice")
+
+    def name_of(self, did: str) -> str:
+        return did
+
+    async def poll(self):
+        return []
+
+    async def speak(self, text: str, did: str = "") -> bool:
+        return False
+
+    async def stop(self, did: str = "") -> bool:
+        return False
+
+
 def make_speaker(mi_cfg: Dict[str, Any], log):
-    if mi_cfg.get("mock") or not miservice_available():
+    """按配置选真机 / 演示。
+
+    注意：只有「用户主动勾了演示模式」或「依赖真的缺失且确实无法接真机」时才降级。
+    以前的写法是 mock=False 但缺依赖就静默变演示，用户取消勾选后毫无反应，
+    以为开关坏了——现在缺依赖会直接报错，让人看见问题。
+    """
+    if mi_cfg.get("mock"):
         return MockSpeaker(mi_cfg, log)
+    if not miservice_available():
+        return MissingDependencySpeaker(mi_cfg, log)
     return RealSpeaker(mi_cfg, log)
