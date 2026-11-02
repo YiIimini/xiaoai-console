@@ -2,6 +2,9 @@
 (() => {
   "use strict";
 
+  // 挂载到宿主子路径时（如 /xiaoai），所有接口与资源都要带前缀
+  const BASE = window.XIAOAI_BASE || "";
+
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const SECRET_FIELDS = new Set(["password", "api_key"]);
@@ -17,7 +20,7 @@
     const opt = body === undefined
       ? { method: "GET" }
       : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-    const res = await fetch(path, opt);
+    const res = await fetch(BASE + path, opt);
     let data;
     try { data = await res.json(); } catch { data = { ok: false, error: "响应解析失败" }; }
     if (!res.ok && data.ok !== false) data = { ok: false, error: data.error || ("HTTP " + res.status) };
@@ -265,7 +268,7 @@
     box.className = "result";
     box.textContent = "";
     let acc = "";
-    const res = await fetch("/api/chat/stream", {
+    const res = await fetch(BASE + "/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
@@ -482,10 +485,10 @@
     toast("已开始下载");
   }
   $("#btn-hist-export-md").addEventListener("click", () => {
-    downloadAs("/api/history/export?format=md&limit=500", "xiaoai-history.md");
+    downloadAs(BASE + "/api/history/export?format=md&limit=500", "xiaoai-history.md");
   });
   $("#btn-hist-export-json").addEventListener("click", () => {
-    downloadAs("/api/history/export?format=json&limit=500", "xiaoai-history.json");
+    downloadAs(BASE + "/api/history/export?format=json&limit=500", "xiaoai-history.json");
   });
 
   $("#btn-hist-refresh").addEventListener("click", loadHistory);
@@ -748,7 +751,7 @@
   }
 
   function connectSSE() {
-    const es = new EventSource("/api/logs/stream?after=" + LAST_SEQ);
+    const es = new EventSource(BASE + "/api/logs/stream?after=" + LAST_SEQ);
     es.onopen = () => $("#sse-dot").classList.add("on");
     es.onerror = () => $("#sse-dot").classList.remove("on");
     es.onmessage = ev => {

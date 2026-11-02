@@ -4,7 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小爱同学 · 大模型工作台</title>
-<link rel="stylesheet" href="/style.css">
+<script>
+/* 同一套页面既能在 standalone 根路径跑，也能挂到宿主应用的子路径（如 /xiaoai）下。
+   在解析阶段就确定前缀，静态资源与接口都跟着它走。 */
+(function () {
+  var p = location.pathname;
+  var base = p.indexOf("/xiaoai") === 0 ? "/xiaoai" : "";
+  window.XIAOAI_BASE = base;
+  document.write('<link rel="stylesheet" href="' + base + '/style.css">');
+})();
+</script>
 </head>
 <body>
 <div class="app">
@@ -579,6 +588,11 @@
 
   <div class="toast" id="toast"></div>
 </div>
-<script src="/app.js"></script>
+<script>
+(function () {
+  var base = window.XIAOAI_BASE || "";
+  document.write('<script src="' + base + '/app.js"><\/script>');
+})();
+</script>
 </body>
 </html>

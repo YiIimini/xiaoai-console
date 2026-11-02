@@ -48,6 +48,10 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 |---|---|
 | ![米家](screenshots/ui-miot.png) | ![记忆](screenshots/ui-memory.png) |
 
+| 挂进宿主工作台（/xiaoai） |
+|---|
+| ![挂载](screenshots/ui-mounted.png) |
+
 | 多音箱接管 |
 |---|
 | ![多音箱](screenshots/ui-multi.png) |
@@ -209,6 +213,40 @@ XIAOAI_PORT=8899 ./start.sh   # 指定端口
 | 逐句流式播报 | **代码块整体跳过**不会被念；关掉则等全部生成完再播摘要 |
 | 允许语音打断 | 关掉则上一轮结束前的输入被忽略，**不会排队重放** |
 
+## 挂进宿主工作台（/xiaoai）
+
+除了独立跑，「小爱音箱工作台」也能作为一个独立管理页面挂到别的工作台里。当前已挂在 `http://127.0.0.1:8787/xiaoai`（四川路亚鱼讯工作台）。
+
+### 怎么挂的
+
+不复制任何路由逻辑——宿主的连接对象被交给 standalone 那套 Handler，改写前缀后直接调用：
+
+```python
+h = Handler.__new__(Handler)      # 绕过 __init__，复用同一条连接
+h.rfile, h.wfile = outer.rfile, outer.wfile
+h.path = "/api/state"             # /xiaoai/api/state 去前缀
+h.do_GET()
+```
+
+所以**加接口只改一处**，两边永远同步。SSE、流式对话、静态资源全部照常工作。
+
+一个坑：宿主的 `do_POST` 会先把请求体读空，所以 `/xiaoai` 必须在**读体之前**分发，否则 POST 全是空 body。
+
+### 换台电脑怎么装
+
+```bash
+cd xiaoai-console
+./tools/install-luredaily.sh /path/to/LureDaily
+```
+
+脚本会：把代码内置到 `<LureDaily>/vendor/xiaoai-console`、安装 `dashboard/xiaoai_app.py`、写 `dashboard/xiaoai.path`、幂等修改 `dashboard/server.py` 加入 `/xiaoai` 路由、给侧栏注册入口。重复执行安全。
+
+代码查找顺序：`XIAOAI_HOME` → `dashboard/xiaoai.path` → `vendor/xiaoai-console` → 工作区同级目录。打包后走第三条，换机即可用。
+
+### 不要同时双开
+
+挂载实例和 standalone（默认 8799）会轮询**同一个小米账号**，互相抢回答。挂载模式启动时若发现 8799 在跑会打印警告。
+
 ## 多音箱
 
 一个工作台可以同时接管多台音箱：**谁被唤醒就回谁**。
@@ -342,12 +380,15 @@ Markdown 里工具结果是折叠的（`<details>`），长日志不会把文档
 ```
 xiaoai-console/
 ├── run-tests.sh                           跑测试
-├── tests/                                 单元测试（44 例）
+├── tests/                                 单元测试
 ├── .github/workflows/test.yml             CI：三平台 × 两版本
 ├── start.sh / start.command / stop.sh     一键启停（macOS / Linux）
 ├── start.bat                              Windows 一键启动
 ├── pack.sh                                打包可搬运的 zip
 ├── requirements.txt                       唯一依赖 miservice
+├── tools/
+│   ├── install-luredaily.sh               挂进宿主工作台（/xiaoai）
+│   └── xiaoai_app.py                      挂载桥接模块（安装时复制过去）
 ├── data/                                  运行时：config.json / history.json / console.log / .mi.token
 └── app/
     ├── server.py    标准库 HTTP 服务 + JSON API + SSE
@@ -359,9 +400,9 @@ xiaoai-console/
     ├── scenes.py    自定义场景引擎
     ├── memory.py    对话记忆（短期上下文 + 长期落盘）
     ├── export.py    会话导出（Markdown / JSON）
-    ├── store.py     配置、历史、日志持久化 + 路径可移植
-    ├── health.py    环境体检（Python/依赖/端口/路径/凭据）
+    ├── health.py    环境体检
     ├── doctor.py    命令行体检入口
+    ├── console.py   控制台编码兜底
     └── web/         前端（零构建）
 ```
 
@@ -386,7 +427,7 @@ POST /api/portable/import | /api/portable/default-repo
 ./run-tests.sh                       # 或 python -m unittest discover -s tests -t .
 ```
 
-118 个用例，覆盖：命令注入与路径越界、配置可移植与密钥脱敏、播报文本压缩、唤醒词、LLM 重试策略、HTTP 层跨站拦截与参数钳制、米家值转换与高危设备保护、场景校验与部分失败处理、记忆上下文拼装与预算、流式 SSE 解析与降级、句子切分与代码块跳过、打断世代号、多音箱路由与请求去重、会话导出结构。测试不依赖 `miservice`，CI 在 Ubuntu / macOS / Windows × Python 3.9 / 3.12 上跑。
+126 个用例，覆盖：命令注入与路径越界、配置可移植与密钥脱敏、播报文本压缩、唤醒词、LLM 重试策略、HTTP 层跨站拦截与参数钳制、米家值转换与高危设备保护、场景校验与部分失败处理、记忆上下文拼装与预算、流式 SSE 解析与降级、句子切分与代码块跳过、打断世代号、多音箱路由与请求去重、会话导出结构、挂载前缀与代码定位。测试不依赖 `miservice`，CI 在 Ubuntu / macOS / Windows × Python 3.9 / 3.12 上跑。
 
 ## 已知限制
 
