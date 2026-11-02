@@ -42,9 +42,12 @@ class ServerTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.logfile = open(os.path.join(ROOT, "data", "test-server.out"), "w+")
-        # 关键：不让测试实例覆盖真实的 data/port，否则 start.sh / stop.sh 会认错端口
-        env = dict(os.environ, XIAOAI_NO_PORT_FILE="1")
+        import tempfile
+
+        cls.datadir = tempfile.mkdtemp(prefix="xiaoai-test-")
+        cls.logfile = open(os.path.join(cls.datadir, "test-server.out"), "w+")
+        # 数据目录隔离 + 不写 port 文件，避免污染真实配置
+        env = dict(os.environ, XIAOAI_NO_PORT_FILE="1", XIAOAI_DATA_DIR=cls.datadir)
         cls.proc = subprocess.Popen(
             [sys.executable, "-m", "app.server", "--port", str(PORT)],
             cwd=ROOT, stdout=cls.logfile, stderr=subprocess.STDOUT, env=env)
@@ -130,3 +133,65 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecretKeepTest(unittest.TestCase):
+    """凭据字段留空＝不修改，不能把已存的 Key 抹掉。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+
+        cls.datadir = tempfile.mkdtemp(prefix="xiaoai-secret-")
+        cls.proc = subprocess.Popen(
+            [sys.executable, "-m", "app.server", "--port", str(PORT + 1)],
+            cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=dict(os.environ, XIAOAI_NO_PORT_FILE="1", XIAOAI_DATA_DIR=cls.datadir))
+        base = "http://127.0.0.1:%d" % (PORT + 1)
+        for _ in range(80):
+            try:
+                urllib.request.urlopen(base + "/api/ping", timeout=1)
+                return
+            except Exception:
+                time.sleep(0.25)
+        raise RuntimeError("服务器没起来")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()
+        cls.proc.wait(timeout=10)
+
+    def _post(self, payload):
+        base = "http://127.0.0.1:%d" % (PORT + 1)
+        req = urllib.request.Request(
+            base + "/api/config", data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read().decode())
+
+    def _state(self):
+        base = "http://127.0.0.1:%d" % (PORT + 1)
+        with urllib.request.urlopen(base + "/api/state", timeout=8) as r:
+            return json.loads(r.read().decode())
+
+    def _raw(self):
+        import json as _json
+
+        with open(os.path.join(self.datadir, "config.json"), encoding="utf-8") as f:
+            return _json.load(f)
+
+    def test_blank_key_does_not_clear(self):
+        key = "sk-abcdefghijklmnopqrstuvwxyz012345"
+        self._post({"llm": {"api_key": key}})
+        self.assertEqual(self._raw()["llm"]["api_key"], key)
+        self._post({"llm": {"api_key": ""}})              # 空串不应清空
+        self.assertEqual(self._raw()["llm"]["api_key"], key, "留空把 Key 抹掉了")
+        self._post({"llm": {"api_key": "sk-zzzz…wwww"}})  # 掩码也不应清空
+        self.assertEqual(self._raw()["llm"]["api_key"], key, "掩码把 Key 抹掉了")
+
+    def test_blank_password_does_not_clear(self):
+        self._post({"mi": {"password": "secret-pw"}})
+        self._post({"mi": {"password": ""}})
+        self.assertEqual(self._raw()["mi"]["password"], "secret-pw")
+        self._post({"mi": {"password": "********"}})
+        self.assertEqual(self._raw()["mi"]["password"], "secret-pw")

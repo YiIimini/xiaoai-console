@@ -421,11 +421,21 @@
     $("#otp-input").value = "";
   });
 
+  async function persistLlmForm() {
+    // 用户很可能填完 Key 直接点按钮，先把表单落库，否则服务端读到的还是旧配置
+    const patch = collectForm("llm");
+    if (!Object.keys(patch).length) return true;
+    const r = await api("/api/config", { llm: patch });
+    if (r.ok) { DIRTY.delete("llm"); if (r.config) fillForm("llm", r.config.llm); }
+    return r.ok;
+  }
+
   $("#btn-list-models").addEventListener("click", async () => {
     const btn = $("#btn-list-models");
     const box = $("#llm-result");
     btn.disabled = true;
     btn.textContent = "拉取中…";
+    await persistLlmForm();
     box.className = "result";
     box.textContent = "正在向端点请求模型列表（会先用当前已保存的接口地址与 Key）…";
     try {
@@ -455,6 +465,7 @@
     const box = $("#llm-result");
     box.className = "result";
     box.textContent = "正在请求模型…";
+    await persistLlmForm();
     const r = await api("/api/diag/llm");
     box.className = "result " + (r.ok ? "ok" : "err");
     box.textContent = r.ok

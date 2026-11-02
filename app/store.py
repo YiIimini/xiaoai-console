@@ -14,7 +14,8 @@ from .console import safe_print, setup as _setup_console
 _setup_console()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(ROOT, "data")
+# 允许用 XIAOAI_DATA_DIR 指定数据目录：测试隔离、同机跑多套配置都用得上
+DATA_DIR = os.environ.get("XIAOAI_DATA_DIR") or os.path.join(ROOT, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")

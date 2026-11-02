@@ -283,13 +283,18 @@ class Handler(BaseHTTPRequestHandler):
         for section in ("mi", "llm", "agent", "voice"):
             if isinstance(body.get(section), dict):
                 patch[section] = dict(body[section])
-        # 掩码占位符表示「不修改」
-        mi_pw = (patch.get("mi") or {}).get("password")
-        if mi_pw == store.PASSWORD_MASK:
-            patch["mi"].pop("password", None)
-        llm_key = (patch.get("llm") or {}).get("api_key")
-        if llm_key and ("…" in llm_key or llm_key == store.PASSWORD_MASK):
-            patch["llm"].pop("api_key", None)
+        # 凭据字段：留空或填掩码都表示「不修改」，与界面说明保持一致。
+        # （曾经空串会直接写库，等于点一下保存就把已存的 Key 抹了）
+        def _keep_if_blank(section: str, field: str, masked_check) -> None:
+            holder = patch.get(section)
+            if not isinstance(holder, dict) or field not in holder:
+                return
+            val = str(holder.get(field) or "").strip()
+            if not val or masked_check(val):
+                holder.pop(field, None)
+
+        _keep_if_blank("mi", "password", lambda v: v == store.PASSWORD_MASK)
+        _keep_if_blank("llm", "api_key", lambda v: ("…" in v) or v == store.PASSWORD_MASK)
         for sec, key, lo, hi in (("mi", "poll_interval", 0.5, 60),
                                  ("llm", "temperature", 0.0, 2.0),
                                  ("llm", "max_tool_rounds", 1, 20),
@@ -305,6 +310,19 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     holder.pop(key, None)
         cfg = store.save_config(patch)
+        key = (cfg["llm"].get("api_key") or "").strip()
+        if key:
+            problems = []
+            if any(ch.isspace() for ch in key):
+                problems.append("含空格或换行")
+            if "…" in key or "..." in key:
+                problems.append("含省略号（可能贴进了界面上的掩码）")
+            if len(key) < 20:
+                problems.append("长度只有 %d 位，像是没复制完" % len(key))
+            if problems:
+                LOG.warn("API Key 可能有问题：%s。建议整段重新粘贴后再保存" % "；".join(problems))
+            else:
+                LOG.info("API Key 已更新（%s…%s，%d 位）" % (key[:3], key[-4:], len(key)))
         LOG.info("配置已保存")
         return self._json({"ok": True, "config": store.mask_config(cfg)})
 

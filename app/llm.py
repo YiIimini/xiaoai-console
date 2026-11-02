@@ -88,7 +88,7 @@ def _chat_once(
             detail = e.read().decode("utf-8", "replace")[:600]
         except Exception:
             pass
-        raise LLMError("LLM HTTP %s: %s" % (e.code, detail or e.reason))
+        raise _friendly_http_error(e.code, detail, "模型调用")
     except socket.timeout:
         raise LLMError("LLM 请求超时（%ss）" % timeout)
     except urllib.error.URLError as e:
@@ -268,10 +268,10 @@ def list_models(cfg: Dict[str, Any]) -> List[str]:
     except urllib.error.HTTPError as e:
         detail = ""
         try:
-            detail = e.read().decode("utf-8", "replace")[:300]
+            detail = e.read().decode("utf-8", "replace")[:600]
         except Exception:
             pass
-        raise LLMError("拉取模型列表失败 HTTP %s: %s" % (e.code, detail or e.reason))
+        raise _friendly_http_error(e.code, detail, "拉取模型列表")
     except socket.timeout:
         raise LLMError("拉取模型列表超时")
     except urllib.error.URLError as e:
@@ -294,3 +294,41 @@ def list_models(cfg: Dict[str, Any]) -> List[str]:
     if not out:
         raise LLMError("模型列表为空")
     return sorted(set(out))
+
+AUTH_HINT = (
+    "Key 被端点拒绝（HTTP %s）。常见原因：\n"
+    "· Key 已失效或在平台被删除/停用\n"
+    "· 复制不完整（少了尾部字符）或带进了换行/空格\n"
+    "· 用了另一个账号或另一家平台的 Key\n"
+    "到平台重新生成一个，整段覆盖粘贴后点「保存」，再点「获取模型列表」。"
+)
+
+
+def _friendly_http_error(code: int, detail: str, action: str) -> "LLMError":
+    """把各家五花八门的错误 JSON 收拾成一句能照做的话。"""
+    msg = ""
+    try:
+        obj = json.loads(detail)
+        if isinstance(obj, dict):
+            err = obj.get("error")
+            if isinstance(err, dict):
+                msg = str(err.get("message") or "")
+            elif isinstance(err, str):
+                msg = err
+            msg = msg or str(obj.get("message") or "")
+    except (ValueError, TypeError):
+        msg = ""
+
+    if code in (401, 403):
+        text = AUTH_HINT % code
+    elif code == 404:
+        text = "端点或模型不存在（HTTP 404）。检查接口地址是否以 /v1 结尾、模型 ID 是否在当前账号可用。"
+    elif code == 429:
+        text = "请求过于频繁或额度用尽（HTTP 429）。稍等再试，或到平台查看余额。"
+    elif 500 <= code < 600:
+        text = "端点服务端错误（HTTP %d），通常过一会儿会恢复。" % code
+    else:
+        text = "%s失败（HTTP %d）。" % (action, code)
+    if msg:
+        text += "\n\n平台原文：" + msg[:300]
+    return LLMError(text)

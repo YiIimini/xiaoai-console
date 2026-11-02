@@ -75,3 +75,33 @@ class RetryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FriendlyErrorTest(unittest.TestCase):
+    """各家错误 JSON 五花八门，得翻成能照做的话。"""
+
+    def test_401_is_explained(self):
+        msg = str(llm._friendly_http_error(
+            401, '{"error":{"message":"Authentication Fails, Your api key: ****a817 is invalid"}}',
+            "拉取模型列表"))
+        self.assertIn("Key 被端点拒绝", msg)
+        self.assertIn("重新生成", msg)
+        self.assertIn("a817", msg)          # 保留平台原文，方便核对是哪把 Key
+
+    def test_404_mentions_base_url(self):
+        msg = str(llm._friendly_http_error(404, "", "模型调用"))
+        self.assertIn("/v1", msg)
+
+    def test_429_mentions_quota(self):
+        self.assertIn("额度", str(llm._friendly_http_error(429, "", "模型调用")))
+
+    def test_5xx_is_transient(self):
+        self.assertIn("恢复", str(llm._friendly_http_error(503, "", "模型调用")))
+
+    def test_garbage_body_does_not_crash(self):
+        msg = str(llm._friendly_http_error(401, "<html>502</html>", "x"))
+        self.assertIn("Key 被端点拒绝", msg)
+
+    def test_plain_string_error_body(self):
+        msg = str(llm._friendly_http_error(401, '{"error":"bad key"}', "x"))
+        self.assertIn("bad key", msg)
