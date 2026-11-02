@@ -76,10 +76,12 @@
     if (!box || !cfg) return;
     $$("input,select,textarea", box).forEach(el => {
       const name = el.name;
-      if (!name) return;
+      if (!name || el.disabled || (el.hidden && el.tagName === "INPUT")) return;
       const v = cfg[name];
       if (el.type === "checkbox") {
         el.checked = !!v;
+      } else if (name === "model") {
+        setModelField(v || "");
       } else if (SECRET_FIELDS.has(name)) {
         el.value = "";
         el.placeholder = v ? "已配置（留空则不修改）" : (el.getAttribute("data-ph") || "");
@@ -95,7 +97,7 @@
     if (!box) return out;
     $$("input,select,textarea", box).forEach(el => {
       const name = el.name;
-      if (!name) return;
+      if (!name || el.disabled || (el.hidden && el.tagName === "INPUT")) return;
       if (el.type === "checkbox") { out[name] = el.checked; return; }
       const raw = el.value;
       if (SECRET_FIELDS.has(name)) {
@@ -421,6 +423,51 @@
     $("#otp-input").value = "";
   });
 
+
+  /* ------------------------------------------------ 模型：下拉优先，手填兜底 */
+  function setModelField(value) {
+    const sel = $("#model-select");
+    const inp = $("#model-input");
+    if (!sel || !inp) return;
+    if (value && !Array.from(sel.options).some(o => o.value === value)) {
+      sel.insertAdjacentHTML("afterbegin", `<option value="${esc(value)}">${esc(value)}</option>`);
+    }
+    if (!inp.hidden) {          // 当前是手动模式
+      inp.value = value || "";
+      return;
+    }
+    sel.value = value || "";
+  }
+
+  function useManualModel(manual) {
+    const sel = $("#model-select");
+    const inp = $("#model-input");
+    if (!sel || !inp) return;
+    const cur = manual ? (sel.value || "") : (inp.value || "");
+    sel.hidden = manual;
+    sel.disabled = manual;
+    inp.hidden = !manual;
+    inp.disabled = !manual;
+    $("#btn-model-manual").textContent = manual ? "用下拉选" : "手动输入";
+    if (manual) inp.value = cur; else {
+      if (cur && !Array.from(sel.options).some(o => o.value === cur)) {
+        sel.insertAdjacentHTML("afterbegin", `<option value="${esc(cur)}">${esc(cur)}</option>`);
+      }
+      sel.value = cur;
+    }
+  }
+
+  function fillModelOptions(models, current) {
+    const sel = $("#model-select");
+    if (!sel) return;
+    sel.innerHTML = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    if (current && !models.includes(current)) {
+      sel.insertAdjacentHTML("afterbegin", `<option value="${esc(current)}">${esc(current)}（当前）</option>`);
+    }
+    sel.value = (current && (models.includes(current) || true)) ? current : models[0];
+    if (sel.value !== current && current) sel.value = current;
+  }
+
   async function persistLlmForm() {
     // 用户很可能填完 Key 直接点按钮，先把表单落库，否则服务端读到的还是旧配置
     const patch = collectForm("llm");
@@ -429,6 +476,11 @@
     if (r.ok) { DIRTY.delete("llm"); if (r.config) fillForm("llm", r.config.llm); }
     return r.ok;
   }
+
+  $("#btn-model-manual").addEventListener("click", () => {
+    const inp = $("#model-input");
+    useManualModel(inp.hidden);      // 当前是下拉就切手填，反之亦然
+  });
 
   $("#btn-list-models").addEventListener("click", async () => {
     const btn = $("#btn-list-models");
@@ -446,15 +498,12 @@
           "\n\n提示：先点「保存」把接口地址和 Key 存下来，再获取；个别端点不提供 /models，只能手动填。";
         return;
       }
-      const dl = $("#model-list");
-      dl.innerHTML = r.models.map(m => `<option value="${esc(m)}"></option>`).join("");
-      const cur = $('.panel[data-panel="llm"] input[name="model"]');
-      if (cur && !cur.value && r.models.length) {
-        setField(cur, (r.current && r.models.includes(r.current)) ? r.current : r.models[0]);
-      }
+      useManualModel(false);
+      const pick = (r.current && r.models.includes(r.current)) ? r.current : r.models[0];
+      fillModelOptions(r.models, pick);
       box.className = "result ok";
-      box.textContent = `拉到 ${r.models.length} 个模型：\n` + r.models.slice(0, 40).join("、") +
-        (r.models.length > 40 ? " …" : "") + "\n\n在「模型」输入框里点一下就能选。";
+      box.textContent = `拉到 ${r.models.length} 个模型，已在下拉里，选一个再点「保存」：\n` +
+        r.models.slice(0, 20).join("、") + (r.models.length > 20 ? " …" : "");
     } finally {
       btn.disabled = false;
       btn.textContent = "获取模型列表";
@@ -483,7 +532,16 @@
     toast(MI_DIDS.length > 1 ? `已保存，接管 ${MI_DIDS.length} 台音箱` : "配置已保存");
     refresh();
   });
-  $("#btn-save-llm").addEventListener("click", () => saveSection("llm"));
+  $("#btn-save-llm").addEventListener("click", async () => {
+    const cfg = await saveSection("llm");
+    if (!cfg) return;
+    const sel = $("#model-select");
+    const hasList = sel && Array.from(sel.options).some(o => o.value);
+    // 刚填完 Key 就该自动把模型列出来，不用再点一次按钮
+    if (!hasList && (cfg.llm?.api_key || "").trim() !== "") {
+      $("#btn-list-models").click();
+    }
+  });
   $("#btn-save-agent").addEventListener("click", () => saveSection("agent"));
   $("#btn-save-voice").addEventListener("click", () => saveSection("voice"));
 
@@ -840,6 +898,8 @@
     });
     bindDirtyTracking();
     await refresh();
+    const savedModel = (STATE && STATE.config && STATE.config.llm && STATE.config.llm.model) || "";
+    if (savedModel) setModelField(savedModel);
     const last = await api("/api/logs?limit=200");
     if (last.ok) (last.items || []).forEach(appendLog);
     connectSSE();

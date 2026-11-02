@@ -227,11 +227,14 @@
 
             <label class="full">模型
               <div class="row" style="margin:0">
-                <input name="model" list="model-list" placeholder="点右侧「获取列表」自动填充，或手动输入" style="flex:1">
-                <button class="btn" id="btn-list-models" type="button" title="向该端点请求 /models，列出当前可用的模型 ID">获取模型列表</button>
+                <select name="model" id="model-select" style="flex:1">
+                  <option value="">（尚未获取列表）</option>
+                </select>
+                <input name="model" id="model-input" hidden placeholder="手动输入模型 ID" style="flex:1" disabled>
+                <button class="btn" id="btn-list-models" type="button" title="向该端点请求 /models，拉到后直接下拉选">获取模型列表</button>
+                <button class="btn" id="btn-model-manual" type="button" title="端点不支持 /models 时改用手填">手动输入</button>
               </div>
-              <datalist id="model-list"></datalist>
-              <span class="note"><b>不写死</b>：各家模型 ID 会更新（改名、下线、上新），所以这里直接从你的 Key 所属端点拉取。填好接口地址和 Key 后点「获取模型列表」，下拉里选一个即可；拉不到再手动填。</span>
+              <span class="note"><b>不写死</b>：模型 ID 从你的 Key 所属端点现场拉取，拉到后直接<b>下拉选</b>。保存 Key 时会自动拉一次；端点不支持 <code>/models</code> 再点「手动输入」。</span>
             </label>
 
             <label>温度
