@@ -709,6 +709,28 @@
   }
   $("#btn-selfcheck").addEventListener("click", runSelfcheck);
 
+  $("#btn-netcheck").addEventListener("click", async () => {
+    const box = $("#net-result");
+    box.hidden = false;
+    box.className = "result";
+    box.textContent = "正在对比直连 / 代理 / 小米通道的出口…";
+    const r = await api("/api/net/proxy");
+    if (!r.ok) { box.className = "result err"; box.textContent = r.error || "失败"; return; }
+    const lines = [
+      "直连出口    ：" + (r.direct?.text || "-"),
+      "系统代理出口：" + (r.proxied?.text || "未开启"),
+      "小米实际通道：" + (r.miservice?.text || "-"),
+      "强制直连    ：" + (r.bypass_proxy ? "已开启" : "已关闭"),
+      "",
+      ...(r.verdict || []),
+    ];
+    // 只有「小米实际通道在境外」才是硬问题；仅代理在境外只作提示
+    const viaCountry = (r.miservice?.raw?.country || "").toUpperCase();
+    const bad = viaCountry && viaCountry !== "CN";
+    box.className = "result " + (bad ? "err" : "ok");
+    box.textContent = lines.join("\n");
+  });
+
   async function exportConfig(withSecrets) {
     const r = await api("/api/portable/export?secrets=" + (withSecrets ? "1" : "0"));
     if (!r.ok) return toast(r.error || "导出失败", true);

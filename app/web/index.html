@@ -169,6 +169,12 @@
               <span class="note"><b>也不用自己猜</b>：点「发现设备」会把真实型号带回来。它只影响能力判断（音量/播放接口），填错通常也能正常播报；能直接输入任意型号，不受列表限制。</span>
             </label>
 
+            <label class="chk full">
+              <input type="checkbox" name="bypass_proxy">
+              <span class="chk-t">小米请求强制直连（绕过系统代理）</span>
+              <span class="note"><b class="warn">开代理时务必保持勾选</b>：小米对国内账号的异地登录极敏感，从海外节点登录会触发验证码、反复失败后变成 20024。工作台默认已勾选，只影响小米接口，不影响大模型请求。</span>
+            </label>
+
             <label>轮询间隔（秒）
               <input name="poll_interval" type="number" step="0.5" min="0.5" value="1">
               <span class="note"><b class="warn">别低于 1 秒</b>：小爱对话记录来自小米云接口，太频繁会被限流甚至短暂封号。1 秒的手感已经接近实时。</span>
@@ -480,8 +486,10 @@
           <p class="hint">换电脑后先点这里。它会逐项检查 Python、依赖、目录权限、端口、配置完整性和旧机器残留路径。</p>
           <div class="row">
             <button class="btn primary" id="btn-selfcheck" title="检查本机能否正常运行，不会改动任何配置">开始体检</button>
+            <button class="btn" id="btn-netcheck" title="对比直连 / 系统代理 / 小米实际通道的出口 IP 归属地">检测网络出口</button>
             <span class="muted" id="selfcheck-summary"></span>
           </div>
+          <div class="result" id="net-result" hidden></div>
           <div class="checks" id="checks"><p class="muted">还没有体检结果。</p></div>
         </div>
 

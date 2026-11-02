@@ -21,7 +21,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
-from . import bridge, export, health, llm, memory, miot, scenes, store
+from . import bridge, export, health, llm, memory, miot, netdiag, scenes, store
 from .console import safe_print
 from . import mi as mi_mod
 from .mi import OTP, MiError, miservice_available
@@ -172,6 +172,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/diag/mi":
             return self._diag_mi()
 
+        if path == "/api/net/proxy":
+            try:
+                return self._json({"ok": True, **netdiag.check()})
+            except Exception as e:  # noqa: BLE001
+                return self._json({"ok": False, "error": str(e)}, 500)
         if path == "/api/llm/models":
             cfg = store.load_config()["llm"]
             try:

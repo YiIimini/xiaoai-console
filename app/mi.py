@@ -125,6 +125,53 @@ RISK_MARKERS = (
 RISK_NEEDLES = {"用户行为被限制", "20024", "Failed to send OTP", "client withdraw", '"code":-127'}
 
 
+# ---------------------------------------------------------------- 直连小米
+_DIRECT_READY = False
+
+
+def install_direct_transport() -> bool:
+    """让小米请求绕过系统代理，强制直连。
+
+    为什么必须这么做：miservice 用 urllib，而 urllib 的 build_opener 默认会
+    读系统代理（macOS 上读 scutil --proxy）。开了 VPN/代理时，登录请求会从
+    海外节点发出——对国内账号就是「异地登录」，直接触发二次验证和短信，
+    反复失败后变成 20024 用户行为被限制。
+
+    biohttp 每个请求都自己 build_opener，所以把它的 build_opener 换成
+    注入了空 ProxyHandler 的版本即可，作用域只限 miservice，不影响大模型请求。
+    """
+    global _DIRECT_READY
+    if _DIRECT_READY:
+        return True
+    if not store.load_config()["mi"].get("bypass_proxy", True):
+        return False
+    try:
+        import miservice.biohttp as bio
+        import urllib.request as _rq
+    except Exception:
+        return False
+
+    orig = bio.urlrequest.build_opener
+
+    class _Shim:
+        pass
+
+    shim = _Shim()
+    for attr in dir(bio.urlrequest):
+        try:
+            setattr(shim, attr, getattr(bio.urlrequest, attr))
+        except Exception:
+            pass
+
+    def build_opener(*handlers):
+        return orig(_rq.ProxyHandler({}), *handlers)   # 空字典＝不走任何代理
+
+    shim.build_opener = build_opener
+    bio.urlrequest = shim
+    _DIRECT_READY = True
+    return True
+
+
 def stable_device_id() -> str:
     """固定设备指纹：随机 deviceId 会让每次登录都被判定为「陌生设备」。"""
     try:
@@ -293,6 +340,7 @@ class RealSpeaker:
             loop = __import__("asyncio").get_running_loop()
             return await loop.run_in_executor(None, OTP.request, method)
 
+        install_direct_transport()
         self.session = MiAccount(
             None, user, pwd,
             token_store=store.resolve(self.cfg.get("token_path") or "data/.mi.token"),

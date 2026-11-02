@@ -177,6 +177,9 @@ class RealMiot:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, OTP.request, method)
 
+        from .mi import install_direct_transport
+
+        install_direct_transport()
         account = MiAccount(
             None, user, pwd,
             token_store=store.resolve(self.cfg.get("token_path") or "data/.mi.token"),

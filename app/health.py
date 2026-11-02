@@ -129,6 +129,23 @@ def check(port: int = 0) -> Dict[str, Any]:
                          "演示模式不会连真机；接管音箱请在「音箱接入」取消勾选"))
 
     try:
+        from . import netdiag
+
+        net = netdiag.check()
+        via = (net.get("miservice") or {}).get("raw") or {}
+        country = (via.get("country") or "").upper()
+        if country and country not in ("CN",):
+            rows.append(_row(BAD, "小米出口 IP",
+                             "%s（%s）" % (net["miservice"]["text"], "境外"),
+                             "境外出口会被判异地登录，在代理规则里把 mi.com 设为直连"))
+        elif country == "CN":
+            proxied = (net.get("proxied") or {}).get("text") or "无"
+            rows.append(_row(OK, "小米出口 IP",
+                             "%s（系统代理出口：%s）" % (net["miservice"]["text"], proxied)))
+    except Exception:
+        pass
+
+    try:
         from .mi import in_cooldown
 
         blocked = in_cooldown()
