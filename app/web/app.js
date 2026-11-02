@@ -767,6 +767,11 @@
 
   /* ------------------------------------------------ 启动 */
   (async function boot() {
+    // 只有挂在宿主子路径下才显示「返回工作台」，standalone 模式不显示
+    if (BASE) {
+      const back = $("#back-home");
+      if (back) { back.hidden = false; back.href = "/"; }
+    }
     // 记住初始 placeholder，secret 字段清空后回落
     $$(".form input").forEach(el => {
       if (SECRET_FIELDS.has(el.name)) el.setAttribute("data-ph", el.placeholder || "");

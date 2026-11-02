@@ -286,3 +286,14 @@ input[type=checkbox]{width:auto; accent-color:var(--cy)}
 }
 .rows b{color:var(--cy); font-weight:600}
 .rows .tag{margin-left:4px}
+
+
+/* ---------------- 返回宿主（仅挂载模式显示） ---------------- */
+.back-home{
+  display:inline-flex; align-items:center; gap:5px; flex:0 0 auto;
+  padding:6px 11px; border-radius:8px; text-decoration:none;
+  border:1px solid var(--line2); background:var(--panel2); color:var(--tx2);
+  font-size:12.5px; transition:.15s; white-space:nowrap;
+}
+.back-home:hover{border-color:var(--cy); color:#fff; transform:translateX(-2px)}
+.back-home[hidden]{display:none !important}

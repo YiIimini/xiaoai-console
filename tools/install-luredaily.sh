@@ -110,6 +110,18 @@ else:
         print("侧栏入口: 已添加")
 PY
 
+# ---------- 6. 宿主 venv 里有没有 miservice ----------
+HOST_PY="$TARGET/.venv/bin/python"
+[ -x "$HOST_PY" ] || HOST_PY="$(command -v python3 || true)"
+if [ -n "$HOST_PY" ]; then
+  if "$HOST_PY" -c "import miservice" >/dev/null 2>&1; then
+    ok "宿主环境已装 miservice"
+  else
+    printf "\033[33m[install]\033[0m 宿主环境缺 miservice —— 挂载版只能用演示模式（接不了真音箱）\n"
+    printf "          装一下：%s -m pip install -r %s/requirements.txt\n" "$HOST_PY" "$VENDOR"
+  fi
+fi
+
 ok "安装完成"
 echo
 echo "下一步："
