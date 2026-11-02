@@ -10,7 +10,10 @@ miservice 3.x 关键 API：
 """
 from __future__ import annotations
 
+import json
+import os
 import queue
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -22,6 +25,7 @@ from . import store
 class OtpSlot:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self.since: float = 0.0
         self.method: Optional[str] = None
         self.code: Optional[str] = None
         self._evt = threading.Event()
@@ -35,6 +39,7 @@ class OtpSlot:
     def request(self, method: str) -> str:
         with self._lock:
             self.method = method
+            self.since = time.time()
             self.code = None
             self._evt.clear()
         self._evt.wait(timeout=180)
@@ -46,9 +51,19 @@ class OtpSlot:
             self.code = code
             self._evt.set()
 
+    def cancel(self) -> None:
+        """用户放弃输入：立刻结束等待，不要挂在后台占 3 分钟。"""
+        with self._lock:
+            self.code = ""
+            self._evt.set()
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
-            return {"waiting": self.method is not None and not self._evt.is_set(), "method": self.method}
+            return {
+                "waiting": self.method is not None and not self._evt.is_set(),
+                "method": self.method,
+                "since": self.since,
+            }
 
 
 OTP = OtpSlot()
@@ -70,8 +85,35 @@ def miservice_available() -> bool:
 
 
 # ---------------------------------------------------------------- 登录与风控
-#: 小米风控拦截后，本地先冷却，避免用户狂点把情况弄更糟
+# 参考成熟实现（micloud / python-miio / Home Assistant xiaomi_miot）的做法：
+#   1) token 优先，只有缺 sid 才登录
+#   2) deviceId 必须稳定——每次随机会被小米当成新设备，直接触发短信验证
+#   3) 登录串行，同一时刻只允许一个在飞
+#   4) 冷却要落盘，重启不重置
+#   5) 采纳小米返回的 wt 作为冷却时长
+
+COOLDOWN_FILE = os.path.join(store.DATA_DIR, "mi-cooldown.json")
+DEVICE_FILE = os.path.join(store.DATA_DIR, ".mi.device")
+
 _COOLDOWN: Dict[str, Any] = {"until": 0.0, "reason": ""}
+
+#: 按事件循环分锁。曾用 threading.Lock，但同一循环里的两个协程会在
+#: acquire 上互相卡死（阻塞的是整个循环），所以必须用 asyncio.Lock。
+_LOGIN_LOCKS: Dict[int, Any] = {}
+
+
+def _login_lock():
+    import asyncio as _aio
+
+    loop = _aio.get_running_loop()
+    key = id(loop)
+    lock = _LOGIN_LOCKS.get(key)
+    if lock is None:
+        lock = _aio.Lock()
+        if len(_LOGIN_LOCKS) > 8:        # 循环对象不多，兜个上限
+            _LOGIN_LOCKS.clear()
+        _LOGIN_LOCKS[key] = lock
+    return lock
 
 RISK_MARKERS = (
     ("用户行为被限制", "小米风控拦截：短时间内登录或验证码请求过多。"),
@@ -80,19 +122,76 @@ RISK_MARKERS = (
     ("client withdraw", "小米作废了当前会话（client withdraw）——通常紧跟风控之后。"),
     ('"code":-127', "小米作废了当前会话（client withdraw）——通常紧跟风控之后。"),
 )
+RISK_NEEDLES = {"用户行为被限制", "20024", "Failed to send OTP", "client withdraw", '"code":-127'}
+
+
+def stable_device_id() -> str:
+    """固定设备指纹：随机 deviceId 会让每次登录都被判定为「陌生设备」。"""
+    try:
+        with open(DEVICE_FILE, "r", encoding="utf-8") as f:
+            val = f.read().strip()
+        if val:
+            return val
+    except OSError:
+        pass
+    import uuid
+
+    val = uuid.uuid4().hex[:16].upper()
+    try:
+        os.makedirs(os.path.dirname(DEVICE_FILE), exist_ok=True)
+        with open(DEVICE_FILE, "w", encoding="utf-8") as f:
+            f.write(val)
+        os.chmod(DEVICE_FILE, 0o600)
+    except OSError:
+        pass
+    return val
+
+
+def _load_cooldown() -> None:
+    try:
+        with open(COOLDOWN_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if float(data.get("until") or 0) > time.time():
+            _COOLDOWN.update({"until": float(data["until"]), "reason": data.get("reason") or ""})
+    except Exception:
+        pass
+
+
+def _save_cooldown() -> None:
+    try:
+        with open(COOLDOWN_FILE, "w", encoding="utf-8") as f:
+            json.dump({"until": _COOLDOWN["until"], "reason": _COOLDOWN["reason"]}, f,
+                      ensure_ascii=False)
+    except OSError:
+        pass
 
 
 def in_cooldown() -> str:
     """冷却期内返回原因，否则空串。"""
+    if _COOLDOWN["until"] and time.time() >= _COOLDOWN["until"]:
+        _COOLDOWN.update({"until": 0.0, "reason": ""})
+        _save_cooldown()
     if time.time() < _COOLDOWN["until"]:
         left = int(_COOLDOWN["until"] - time.time())
         return "小米风控冷却中（还需 %d 分 %d 秒）：%s" % (left // 60, left % 60, _COOLDOWN["reason"])
     return ""
 
 
-def set_cooldown(minutes: int, reason: str) -> None:
-    _COOLDOWN["until"] = time.time() + minutes * 60
+def set_cooldown(seconds: int, reason: str) -> None:
+    _COOLDOWN["until"] = time.time() + max(0, seconds)
     _COOLDOWN["reason"] = reason
+    _save_cooldown()
+
+
+def _wt_seconds(text: str) -> int:
+    """小米在风控错误里会给 wt（等待权重），能解析就采纳，夹在 10–60 分钟。"""
+    m = re.search(r"'wt':\s*(\d+)", text) or re.search(r'"wt":\s*(\d+)', text)
+    if not m:
+        return 600
+    try:
+        return max(600, min(3600, int(m.group(1))))
+    except ValueError:
+        return 600
 
 
 def friendly_mi_error(exc: Exception) -> "MiError":
@@ -100,20 +199,21 @@ def friendly_mi_error(exc: Exception) -> "MiError":
     text = str(exc)
     for marker, hint in RISK_MARKERS:
         if marker in text:
-            set_cooldown(10, hint)
+            secs = _wt_seconds(text)
+            set_cooldown(secs, hint)
             return MiError(
                 hint + "\n"
-                "已经停止重试，10 分钟内不再登录，请按这个顺序处理：\n"
+                "已经停止重试，%d 分钟内不再登录，请按这个顺序处理：\n"
                 "1) 什么都别点，等 30–60 分钟（时间窗由小米控制，重试只会延长）\n"
                 "2) 手机上的米家 App 正常登录一次，确认账号没被临时限制\n"
                 "3) 回来点一次「测试登录」，通过后 token 会缓存在 data/.mi.token，之后不再重复登录\n\n"
-                "原始错误：" + text[:200]
+                "原始错误：" % (secs // 60) + text[:200]
             )
     return MiError(text)
 
 
 async def ensure_login(account, sid: str) -> None:
-    """只有缓存里没有该 sid 时才真正登录。
+    """只有缓存里没有该 sid 时才真正登录，且同一时刻只允许一个登录在飞。
 
     MiAccount.login() 每次都会走完整的 serviceLogin，可能触发验证码和风控。
     原先是无条件调用，于是「发现设备」「测试登录」「桥接重连」每点一次就登录一次，
@@ -124,9 +224,24 @@ async def ensure_login(account, sid: str) -> None:
             account.token = await account.token_store.load_token()
         except Exception:
             account.token = None
-    if account.token and sid in account.token:
+
+    # deviceId 必须稳定，否则每次登录都像新设备
+    if not account.token:
+        account.token = {}
+    account.token.setdefault("deviceId", stable_device_id())
+
+    if sid in account.token:
         return                       # 复用缓存，零网络请求
-    await account.login(sid)
+
+    async with _login_lock():
+        # 双重检查：等锁期间别人可能已经登录成功
+        if account.token and sid in account.token:
+            return
+        await account.login(sid)
+
+
+_load_cooldown()
+
 
 # ---------------------------------------------------------------- 真机
 class RealSpeaker:

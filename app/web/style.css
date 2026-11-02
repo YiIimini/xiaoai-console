@@ -309,3 +309,27 @@ input[type=checkbox]{width:auto; accent-color:var(--cy)}
 .steps ol{margin:0; padding-left:20px}
 .steps li{margin:4px 0}
 .steps li b{color:var(--cy); font-weight:600}
+
+
+/* ---------------- 验证码悬浮弹窗 ---------------- */
+.otp-overlay{
+  position:fixed; inset:0; z-index:120;
+  background:rgba(4,8,12,.72); backdrop-filter:blur(3px);
+  display:flex; align-items:center; justify-content:center; padding:24px;
+  animation:fade .16s ease;
+}
+.otp-overlay[hidden]{display:none !important}
+.otp-modal{
+  width:min(420px,100%); padding:20px 22px; border-radius:12px;
+  background:linear-gradient(160deg,var(--panel),#0d141d);
+  border:1px solid var(--line2);
+  box-shadow:0 24px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(34,211,238,.12);
+}
+.otp-modal h3{margin:0 0 8px; font-size:15px; color:#eaf4ff}
+.otp-desc{margin:0 0 14px; font-size:12.5px; color:var(--tx2); line-height:1.7}
+.otp-modal input{
+  width:100%; font-size:20px; letter-spacing:6px; text-align:center;
+  padding:12px 14px; font-family:var(--mono);
+}
+.otp-row{display:flex; gap:10px; margin-top:14px}
+.otp-row .btn{flex:1}

@@ -189,9 +189,15 @@
     $("#btn-start").disabled = !!b.running;
     $("#btn-stop").disabled = !b.running;
 
-    // 验证码提示
+    // 验证码：全局悬浮弹窗，任何面板下都能看到，不阻塞其它操作
     const otp = st.otp || {};
-    $("#otp-box").hidden = !otp.waiting;
+    const box = $("#otp-box");
+    const wasHidden = box.hidden;
+    box.hidden = !otp.waiting;
+    if (otp.waiting && wasHidden) {
+      setTimeout(() => { const i = $("#otp-input"); if (i) i.focus(); }, 60);
+      $("#otp-hint").textContent = "小米已下发验证码，3 分钟内有效；填好点提交，或直接取消。";
+    }
 
     renderMemory(st.memory);
 
@@ -424,6 +430,15 @@
     box.textContent = `登录成功，用时 ${r.ms} ms。`;
     renderDevices(r.devices, box);
     refresh();
+  });
+
+  $("#btn-otp-cancel").addEventListener("click", async () => {
+    await api("/api/mi/otp/cancel", {});
+    $("#otp-box").hidden = true;
+    toast("已取消本次登录");
+  });
+  $("#otp-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); $("#btn-otp").click(); }
   });
 
   $("#btn-otp").addEventListener("click", async () => {

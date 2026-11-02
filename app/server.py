@@ -228,6 +228,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._diag_llm()
             if path == "/api/diag/mi":
                 return self._diag_mi()
+            if path == "/api/mi/otp/cancel":
+                OTP.cancel()
+                LOG.info("用户取消了验证码输入")
+                return self._json({"ok": True})
             if path == "/api/mi/otp":
                 code = str(body.get("code") or "").strip()
                 if not code:
@@ -445,7 +449,9 @@ class Handler(BaseHTTPRequestHandler):
                 rows.append({**d, "blocked": miot.is_blocked(d)})
             return self._json({"ok": True, "devices": rows, "mock": getattr(client, "is_mock", False)})
         except Exception as e:  # noqa: BLE001
-            LOG.error("读取米家设备失败: %s" % e)
+            from .mi import friendly_mi_error
+
+            LOG.error("读取米家设备失败: %s" % friendly_mi_error(e))
             return self._json({"ok": False, "error": str(e)}, 502)
 
     def _save_scenes(self, body: Dict[str, Any]) -> None:

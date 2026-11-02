@@ -192,12 +192,6 @@
             <code>data/.mi.token</code>，之后不再重复索要。<b class="warn">删掉这个文件就要重新验证。</b>
           </div>
 
-          <div class="otp" id="otp-box" hidden>
-            <span>登录需要验证码：</span>
-            <input id="otp-input" placeholder="输入短信/邮箱验证码">
-            <button class="btn" id="btn-otp">提交</button>
-          </div>
-
           <div class="result" id="mi-result">尚未测试。</div>
 
           <table class="tbl" id="dev-table" hidden>
@@ -606,6 +600,19 @@
     </div>
     <pre class="log-mini" id="log-mini"></pre>
   </footer>
+
+  <div class="otp-overlay" id="otp-box" hidden>
+    <div class="otp-modal" role="dialog" aria-modal="true" aria-labelledby="otp-title">
+      <h3 id="otp-title">小米登录需要验证码</h3>
+      <p class="otp-desc">小米已向你的手机/邮箱发送验证码，请填入下方。填写期间可以继续用其它面板。</p>
+      <input id="otp-input" inputmode="numeric" autocomplete="one-time-code" placeholder="输入 6 位验证码">
+      <div class="otp-row">
+        <button class="btn primary" id="btn-otp">提交验证码</button>
+        <button class="btn" id="btn-otp-cancel">取消本次登录</button>
+      </div>
+      <p class="note" id="otp-hint">超过 3 分钟不填会自动取消。</p>
+    </div>
+  </div>
 
   <div class="toast" id="toast"></div>
 </div>

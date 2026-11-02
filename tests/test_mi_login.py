@@ -112,3 +112,77 @@ class _NullLog:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StrategyTest(unittest.TestCase):
+    """成熟方案的关键点：稳定指纹、串行登录、冷却落盘、采纳 wt。"""
+
+    def setUp(self):
+        mi._COOLDOWN.update({"until": 0.0, "reason": ""})
+        mi._save_cooldown()
+
+    def tearDown(self):
+        mi._COOLDOWN.update({"until": 0.0, "reason": ""})
+        mi._save_cooldown()
+
+    def test_device_id_is_stable(self):
+        a = mi.stable_device_id()
+        self.assertEqual(a, mi.stable_device_id(), "deviceId 每次变动会被当成新设备")
+        self.assertEqual(len(a), 16)
+
+    def test_cooldown_persists_to_disk(self):
+        mi.set_cooldown(600, "测试风控")
+        mi._COOLDOWN.update({"until": 0.0, "reason": ""})   # 模拟进程重启
+        mi._load_cooldown()
+        self.assertIn("冷却中", mi.in_cooldown())
+
+    def test_wt_is_honoured_with_bounds(self):
+        self.assertEqual(mi._wt_seconds("{'wt': 30}"), 600)      # 下限
+        self.assertEqual(mi._wt_seconds("{'wt': 1200}"), 1200)   # 采纳
+        self.assertEqual(mi._wt_seconds("{'wt': 99999}"), 3600)  # 上限
+        self.assertEqual(mi._wt_seconds("没有 wt"), 600)          # 缺省
+
+    def test_login_is_serialised(self):
+        import asyncio
+        import threading
+        import time as _t
+
+        calls = []
+
+        class Slow(_FakeAccount):
+            async def login(self, sid):
+                calls.append(("start", _t.time()))
+                await asyncio.sleep(0.15)
+                calls.append(("end", _t.time()))
+                self.token = {"userId": 1, sid: ("x", "y")}
+                return True
+
+        async def run_both():
+            a1 = Slow(None)
+            a2 = Slow(None)
+            await asyncio.gather(mi.ensure_login(a1, "micoapi"),
+                                 mi.ensure_login(a2, "xiaomiio"))
+
+        asyncio.run(run_both())
+        # 两次登录不能重叠：序列必须是 start/end/start/end
+        kinds = [c[0] for c in calls]
+        self.assertEqual(kinds, ["start", "end", "start", "end"], kinds)
+
+    def test_second_caller_reuses_result(self):
+        import asyncio
+
+        class Once(_FakeAccount):
+            async def login(self, sid):
+                await asyncio.sleep(0.05)
+                self.token = {"userId": 1, sid: ("x", "y")}
+                return True
+
+        acc = Once(None)
+
+        async def go():
+            await mi.ensure_login(acc, "micoapi")
+
+        asyncio.run(go())
+        acc.login_calls.clear()
+        asyncio.run(mi.ensure_login(acc, "micoapi"))
+        self.assertEqual(acc.login_calls, [], "已有 token 还在重登")
