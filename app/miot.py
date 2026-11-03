@@ -550,7 +550,25 @@ def write_prop(name_or_did: str, prop: str, value: Any) -> str:
     if code not in (0, None):
         raise MiotError("设备返回错误码 %s" % code)
     LOG.info("🏠 %s → %s = %r" % (dev["name"], prop, coerced))
-    return "%s 的 %s 已设为 %r" % (dev["name"], prop, coerced)
+
+    # 设备是异步生效的：刚写完立刻读会拿到旧值。
+    # 不校验就会「报告成功、回读没变」，用户以为失败。
+    settled = None
+    for _ in range(6):
+        time.sleep(0.5)
+        try:
+            cur = client().get(dev["did"], meta["siid"], meta["piid"])
+        except Exception:
+            break
+        if cur == coerced or str(cur) == str(coerced):
+            settled = cur
+            break
+        settled = cur
+    if settled is not None and str(settled) != str(coerced):
+        return ("%s 的 %s 已下发 %r，但 %d 秒内回读仍是 %r。"
+                "设备可能异步生效，或该属性要等在播放时才更新。"
+                % (dev["name"], prop, coerced, 3, settled))
+    return "%s 的 %s 已设为 %r（已回读确认）" % (dev["name"], prop, coerced)
 
 
 def do_action(name_or_did: str, action: str, args: Optional[List[Any]] = None) -> str:

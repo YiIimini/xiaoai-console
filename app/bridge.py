@@ -177,6 +177,8 @@ class Bridge:
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=6)
             self._thread = None
+            self.speaker = None          # 不清会留着上个会话，停止后 TTS 还能发出去
+            self._busy = False
             self.state = "stopped"
             LOG.info("桥接已停止")
             return {"ok": True, "state": self.state}
@@ -468,6 +470,7 @@ class Bridge:
             "ms": 0,
             "error": "",
             "spoken": False,
+            "truncated": False,
         }
         # 记忆：把最近几轮问答拼在系统提示之后、本轮提问之前
         mem_ctx = memory.MEM.context()
@@ -520,7 +523,23 @@ class Bridge:
                         "content": result,
                     })
             else:
-                turn["answer"] = "工具调用超过上限，已中断。"
+                # 轮次用完了但还没结论：再问一次，去掉工具逼它收尾。
+                # 直接回「超过上限」用户什么也拿不到，等于这轮白问。
+                LOG.warn("工具轮次达上限，让模型基于已有信息作答")
+                messages.append({
+                    "role": "user",
+                    "content": "（工具调用已达上限，请只根据上面已经拿到的信息直接回答，不要再调用工具。"
+                               "如果信息不足，就说清缺什么。）",
+                })
+                try:
+                    final = llm.chat(messages, llm_cfg, None)
+                    turn["answer"] = (final.get("content") or "").strip()
+                except llm.LLMError as e:
+                    turn["answer"] = ""
+                    turn["error"] = str(e)
+                if not turn["answer"]:
+                    turn["answer"] = "工具调用超过上限，且未能给出结论。"
+                turn["truncated"] = True
         except llm.LLMError as e:
             turn["error"] = str(e)
             turn["answer"] = "大模型调用失败：%s" % e
