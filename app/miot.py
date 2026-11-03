@@ -87,6 +87,21 @@ def _write_cache(name: str, data: Any) -> None:
 
 
 # ---------------------------------------------------------------- 能力解析
+def _desc_name(node: Dict[str, Any], fallback: str) -> str:
+    """miot-spec 里 description 有时是字符串（真机），有时是 {"name": ...}（旧数据）。
+
+    只按一种形状写，另一种就会 AttributeError——真机设备全崩就是这么来的。
+    """
+    desc = node.get("description")
+    if isinstance(desc, str) and desc.strip():
+        return desc.strip()
+    if isinstance(desc, dict):
+        name = desc.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return fallback
+
+
 def describe_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     """把 miot-spec 实例翻成便于人/模型使用的能力表。
 
@@ -96,12 +111,21 @@ def describe_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     props: Dict[str, Dict[str, Any]] = {}
     actions: Dict[str, Dict[str, Any]] = {}
     for svc in (spec or {}).get("services") or []:
-        svc_name = ((svc.get("description") or {}).get("name")) or ("service-%s" % svc.get("iid"))
+        if not isinstance(svc, dict):
+            continue                       # 坏数据不该让整台设备的能力表消失
+        svc_name = _desc_name(svc, "service-%s" % svc.get("iid"))
         siid = svc.get("iid")
         for p in svc.get("properties") or []:
-            pname = ((p.get("description") or {}).get("name")) or ("prop-%s" % p.get("iid"))
-            values = [v.get("description") for v in (p.get("value-list") or [])
-                      if isinstance(v, dict) and v.get("description")]
+            pname = _desc_name(p, "prop-%s" % p.get("iid"))
+            values = []
+            for v in (p.get("value-list") or []):
+                if not isinstance(v, dict):
+                    continue
+                d = v.get("description")
+                if isinstance(d, str) and d.strip():
+                    values.append(d.strip())
+                elif isinstance(d, dict) and d.get("name"):
+                    values.append(str(d["name"]))
             props[pname] = {
                 "siid": siid,
                 "piid": p.get("iid"),
@@ -112,12 +136,12 @@ def describe_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
                 "service": svc_name,
             }
         for a in svc.get("actions") or []:
-            aname = ((a.get("description") or {}).get("name")) or ("action-%s" % a.get("iid"))
+            aname = _desc_name(a, "action-%s" % a.get("iid"))
             actions[aname] = {
                 "siid": siid,
                 "aiid": a.get("iid"),
                 "service": svc_name,
-                "in": [((i.get("description") or {}).get("name")) for i in (a.get("in") or [])],
+                "in": [_desc_name(i, "") for i in (a.get("in") or []) if isinstance(i, dict)],
             }
     return {"props": props, "actions": actions}
 
@@ -177,9 +201,13 @@ class RealMiot:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, OTP.request, method)
 
-        from .mi import install_direct_transport
+        from .mi import (
+            ensure_login, friendly_mi_error, in_cooldown, install_direct_transport,
+            install_modern_ua, install_token_refresh, miservice_available,
+        )
 
         install_direct_transport()
+        install_modern_ua()
         account = MiAccount(
             None, user, pwd,
             token_store=store.resolve(self.cfg.get("token_path") or "data/.mi.token"),
@@ -188,6 +216,7 @@ class RealMiot:
         blocked = in_cooldown()
         if blocked:
             raise MiotError(blocked)
+        install_token_refresh(account)
         try:
             await ensure_login(account, "xiaomiio")
         except Exception as e:  # noqa: BLE001

@@ -225,3 +225,40 @@ class NoSilentDemoTest(_Base):
         cfg["miot"]["mock"] = True
         store.save_config(cfg)
         self.assertIsInstance(miot.make_client({"mock": False}), miot.MockMiot)
+
+
+class SpecShapeTest(unittest.TestCase):
+    """miot-spec 的 description 真机是字符串，演示数据是 {"name": ...}，两种都要吃得下。"""
+
+    def test_string_shape(self):
+        spec = {"services": [{
+            "iid": 2, "description": "speaker",
+            "properties": [
+                {"iid": 1, "description": "volume", "format": "uint8", "access": ["read", "write"]},
+                {"iid": 2, "description": "mute", "format": "bool", "access": ["read", "write"],
+                 "value-list": [{"description": "开"}, {"description": "关"}]},
+            ],
+            "actions": [{"iid": 1, "description": "play", "in": []}],
+        }]}
+        caps = miot.describe_spec(spec)
+        self.assertIn("volume", caps["props"])
+        self.assertEqual(caps["props"]["volume"]["siid"], 2)
+        self.assertEqual(caps["props"]["mute"]["values"], ["开", "关"])
+        self.assertIn("play", caps["actions"])
+
+    def test_dict_shape_still_works(self):
+        spec = {"services": [{"iid": 3, "description": {"name": "light"},
+                              "properties": [{"iid": 1, "description": {"name": "power"},
+                                              "format": "bool", "access": ["read", "write"]}],
+                              "actions": []}]}
+        caps = miot.describe_spec(spec)
+        self.assertIn("power", caps["props"])
+
+    def test_missing_description_falls_back_to_iid(self):
+        spec = {"services": [{"iid": 5, "properties": [{"iid": 7, "format": "bool"}], "actions": []}]}
+        caps = miot.describe_spec(spec)
+        self.assertIn("prop-7", caps["props"])
+
+    def test_garbage_service_does_not_crash(self):
+        caps = miot.describe_spec({"services": ["oops", 42, {"iid": 9}]})
+        self.assertIsInstance(caps["props"], dict)

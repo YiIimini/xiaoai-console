@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import unittest
+from app import store
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -234,3 +235,46 @@ class IdempotentMessageTest(unittest.TestCase):
             self.fail("应当抛错")
         self.assertEqual(msg.count("原始错误"), 1)
         self.assertLess(len(msg), 700)
+
+
+class UserAgentTest(unittest.TestCase):
+    """-127 client withdraw 的真凶是 miservice 自带的老 UA（MiHome 6.0.103）。"""
+
+    def setUp(self):
+        import miservice.miaccount as ma
+        import miservice.miioservice as ms
+
+        self.ma, self.ms = ma, ms
+        self._old_ii = getattr(ms, "UA_MIIO", None)
+        self._old_a = getattr(ma, "UA_MIIO", None)
+        self._cfg = store.load_config() if False else None
+        import copy
+
+        self._backup = copy.deepcopy(mi.store.load_config())
+        mi._UA_READY = False
+
+    def tearDown(self):
+        if self._old_ii is not None:
+            self.ms.UA_MIIO = self._old_ii
+        if self._old_a is not None:
+            self.ma.UA_MIIO = self._old_a
+        mi.store.save_config(self._backup)
+        mi._UA_READY = False
+
+    def test_default_ua_is_not_the_retired_one(self):
+        ua = mi.install_modern_ua()
+        self.assertNotIn("6.0.103", ua, "还在用 2021 年的客户端 UA")
+        self.assertEqual(self.ms.UA_MIIO, ua)
+        self.assertEqual(self.ma.UA_MIIO, ua)
+
+    def test_config_can_override(self):
+        cfg = mi.store.load_config()
+        cfg["mi"]["user_agent"] = "iOS-18.5-9.9.999-iPhone17,1--X-Y-Z-iPhone"
+        mi.store.save_config(cfg)
+        ua = mi.install_modern_ua()
+        self.assertEqual(ua, "iOS-18.5-9.9.999-iPhone17,1--X-Y-Z-iPhone")
+
+    def test_idempotent(self):
+        first = mi.install_modern_ua()
+        second = mi.install_modern_ua()
+        self.assertEqual(first, second)

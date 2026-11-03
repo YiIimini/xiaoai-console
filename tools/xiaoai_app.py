@@ -111,8 +111,13 @@ def mount(outer, path: str) -> bool:
         outer.wfile.write(body)
         return True
 
-    inner_path = path[len(PREFIX):] or "/"
-    # 只允许走到工作台自己的路由，不允许借道跳出前缀
+    # 用 outer.path（原始路径，含 ?query）而不是入参 path——
+    # 宿主传进来的是 unquote(u.path)，查询串已经丢了，
+    # 会害得 /api/miot/spec?device=… 、/api/logs?after=… 全部失效
+    raw = getattr(outer, "path", "") or path
+    cut = raw.find(PREFIX)
+    inner_path = raw[cut + len(PREFIX):] if cut >= 0 else path[len(PREFIX):]
+    inner_path = inner_path or "/"
     if not inner_path.startswith("/"):
         inner_path = "/" + inner_path
 

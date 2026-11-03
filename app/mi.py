@@ -115,18 +115,56 @@ def _login_lock():
         _LOGIN_LOCKS[key] = lock
     return lock
 
+#: 真正的限流风控——需要冷却，不能重试
 RISK_MARKERS = (
     ("用户行为被限制", "小米风控拦截：短时间内登录或验证码请求过多。"),
     ("20024", "小米风控拦截：短时间内登录或验证码请求过多。"),
     ("Failed to send OTP", "小米拒绝下发验证码——通常是登录太频繁触发了风控。"),
-    ("client withdraw", "小米作废了当前会话（client withdraw）——通常紧跟风控之后。"),
-    ('"code":-127', "小米作废了当前会话（client withdraw）——通常紧跟风控之后。"),
 )
-RISK_NEEDLES = {"用户行为被限制", "20024", "Failed to send OTP", "client withdraw", '"code":-127'}
+
+#: 会话失效——token 被作废，刷新一次即可，不该当成限流去冷却
+SESSION_MARKERS = ("client withdraw", '"code":-127', "'code': -127")
+
+#: 这些短语说明已经是人话了，再翻一次就会套娃
+FRIENDLY_MARKERS = ("已经停止重试", "小米风控冷却中", "原始错误：", "正在自动刷新登录会话")
 
 
 # ---------------------------------------------------------------- 直连小米
 _DIRECT_READY = False
+
+#: miservice 自带的 UA 是 2021 年的 MiHome 6.0.103，小米已经把这个客户端作废
+#: （API 返回 -127 client withdraw）。换成仍在服务期的版本即可。
+#: 想用自己的，配 mi.user_agent。
+MODERN_MIIO_UA = (
+    "iOS-18.5-9.6.603-iPhone16,2--"
+    "D7744744F7AF32F0544445285880DD63E47D9BE9-8816080-84A3F44E137B71AE-iPhone"
+)
+
+_UA_READY = False
+
+
+def install_modern_ua() -> str:
+    """把 miservice 里过期的 User-Agent 换掉。
+
+    -127 client withdraw 的字面意思就是「这个客户端已被作废」。
+    旧 UA 对应的 MiHome 6.0.103 早已下线，所有 miio 接口一律拒绝，
+    而登录本身是成功的——所以现象很像风控，其实只是 UA 太老。
+    """
+    global _UA_READY
+    cfg = store.load_config()["mi"]
+    ua = (cfg.get("user_agent") or "").strip() or MODERN_MIIO_UA
+    if _UA_READY:
+        return ua
+    try:
+        import miservice.miaccount as ma
+        import miservice.miioservice as ms
+
+        ms.UA_MIIO = ua
+        ma.UA_MIIO = ua
+        _UA_READY = True
+    except Exception:
+        pass
+    return ua
 
 
 def install_direct_transport() -> bool:
@@ -169,7 +207,50 @@ def install_direct_transport() -> bool:
     shim.build_opener = build_opener
     bio.urlrequest = shim
     _DIRECT_READY = True
+    install_modern_ua()
     return True
+
+
+def is_session_expired(exc: Exception) -> bool:
+    text = str(exc)
+    return any(m in text for m in SESSION_MARKERS)
+
+
+async def refresh_session(account, sid: str) -> None:
+    """丢掉失效的 sid 并重新登录一次。
+
+    小米的 -127 client withdraw 表示这个 sid 的会话被作废了。miservice
+    只在错误信息含 "auth" 时才自动重登，而 client withdraw 里没有这个词，
+    于是一直拿死 token 反复请求，看起来像"永远好不了"。
+    """
+    if account.token and sid in account.token:
+        account.token.pop(sid, None)
+    if getattr(account, "token_store", None) is not None:
+        try:
+            await account.token_store.save_token()
+        except Exception:
+            pass
+    await account.login(sid)
+
+
+def install_token_refresh(account) -> None:
+    """给 account 包一层：遇到会话失效自动刷新 token 并重试一次。"""
+    if getattr(account, "_xiaoai_refresh", False):
+        return
+    orig = account.mi_request
+
+    async def mi_request_with_refresh(sid, url, data, headers, relogin=True):
+        try:
+            return await orig(sid, url, data, headers, relogin)
+        except Exception as e:  # noqa: BLE001
+            if not is_session_expired(e):
+                raise
+            store.LOG.warn("小米会话已失效（%s），刷新 token 后重试一次" % sid)
+            await refresh_session(account, sid)
+            return await orig(sid, url, data, headers, relogin)
+
+    account.mi_request = mi_request_with_refresh
+    account._xiaoai_refresh = True
 
 
 def stable_device_id() -> str:
@@ -263,19 +344,24 @@ def _wt_seconds(text: str) -> int:
         return 600
 
 
-#: 这些短语说明已经是人话了，再翻一次就会套娃
-FRIENDLY_MARKERS = ("已经停止重试", "小米风控冷却中", "原始错误：", "小米作废了当前会话")
-
-
 def friendly_mi_error(exc: Exception) -> "MiError":
-    """把小米那串 JSON 翻成能照做的话，并识别风控。
+    """把小米那串 JSON 翻成能照做的话。
 
-    必须幂等：这个函数会在 _ensure / _guard / 日志 三处被调用，
-    而风控文案本身又把原始错误拼在末尾——不做幂等就会一层套一层。
+    必须幂等：这个函数会被 _ensure / _guard / 日志 三处各调一次。
     """
     text = str(exc)
     if any(m in text for m in FRIENDLY_MARKERS):
-        return MiError(text)
+        return MiError(text)          # 已经是人话，别再包一层
+
+    if is_session_expired(exc):
+        return MiError(
+            "小米拒绝了本客户端的请求（client withdraw / -127）。\n"
+            "这通常不是账号问题，而是客户端版本被小米作废——"
+            "miservice 自带的 UA 是 2021 年的 MiHome 6.0.103，早已下线。\n"
+            "工作台默认已切换到较新 UA；若仍报此错，可在配置里改 mi.user_agent。\n\n"
+            "原始错误：" + text[:200]
+        )
+
     for marker, hint in RISK_MARKERS:
         if marker in text:
             secs = _wt_seconds(text)
@@ -359,6 +445,7 @@ class RealSpeaker:
         blocked = in_cooldown()
         if blocked:
             raise MiError(blocked)
+        install_token_refresh(self.session)
         try:
             await ensure_login(self.session, "micoapi")
         except MiError:

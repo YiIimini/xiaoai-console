@@ -41,7 +41,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "hardware": "LX06",
         "token_path": "data/.mi.token",
         "poll_interval": 1.0,
-        "bypass_proxy": True,          # 小米请求强制直连，避免经 VPN 变成异地登录
+        "bypass_proxy": True,
+        "user_agent": "",              # 留空＝用内置的较新 MiHome UA          # 小米请求强制直连，避免经 VPN 变成异地登录
         "mock": True,
     },
     "llm": {

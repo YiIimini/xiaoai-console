@@ -114,6 +114,21 @@ class MountTest(unittest.TestCase):
         body = self._raw(outer).decode("utf-8")
         self.assertIn('"ok": true', body)
 
+    def test_query_string_is_preserved(self):
+        """宿主传进来的 path 已去掉 query，必须用 outer.path 补回来。"""
+        outer = _FakeOuter()
+        outer.path = "/xiaoai/api/ping?x=1"
+        self.assertTrue(xiaoai_app.mount(outer, "/xiaoai/api/ping"))
+        self.assertIn('"ok": true', self._raw(outer).decode("utf-8"))
+
+    def test_query_reaches_handler(self):
+        """带参数的路由要真的收到参数，而不是空。"""
+        outer = _FakeOuter()
+        outer.path = "/xiaoai/api/miot/spec?device=no-such-device"
+        xiaoai_app.mount(outer, "/xiaoai/api/miot/spec")
+        body = self._raw(outer).decode("utf-8")
+        self.assertNotIn("不能为空", body)
+
     def test_static_asset_served(self):
         outer = _FakeOuter()
         self.assertTrue(xiaoai_app.mount(outer, "/xiaoai/app.js"))
