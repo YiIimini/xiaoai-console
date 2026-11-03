@@ -237,6 +237,16 @@ class IdempotentMessageTest(unittest.TestCase):
         self.assertLess(len(msg), 700)
 
 
+def _has_miservice() -> bool:
+    try:
+        import miservice  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(_has_miservice(), "CI 不安装 miservice，跳过依赖它的用例")
 class UserAgentTest(unittest.TestCase):
     """-127 client withdraw 的真凶是 miservice 自带的老 UA（MiHome 6.0.103）。"""
 
